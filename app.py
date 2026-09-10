@@ -26,8 +26,10 @@ session.headers.update({
 })
 csrf_token = None
 
-# Memoria caché en servidor para proteger la IP del bloqueo 500
-CACHE_TTL = 25  # segundos de gracia
+# Memoria caché en servidor
+CACHE_TTL = 20  # Segundos mínimos entre consultas reales
+MAX_STALE_TTL = 90  # Máximo tiempo permitido para mostrar datos de respaldo
+
 ultimo_cache = {
     "timestamp": 0,
     "hora": "--:--:--",
@@ -39,15 +41,21 @@ def obtener_hora_arg():
     return datetime.now(tz_arg).strftime("%H:%M:%S")
 
 def renovar_token():
-    global csrf_token
+    global csrf_token, session
+    # Vaciamos cookies para evitar desincronización de tokens CSRF en ASP.NET
+    session.cookies.clear()
     resp = session.get(URL_PAGINA, verify=False, timeout=10)
     resp.raise_for_status()
+
     tokens = re.findall(r'CfDJ8[A-Za-z0-9_\-]{80,}', resp.text)
     if tokens:
         csrf_token = tokens[0]
     else:
         m = re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', resp.text, re.IGNORECASE)
         csrf_token = m.group(1) if m else None
+
+    if not csrf_token:
+        raise Exception("No se obtuvo token CSRF.")
 
 def consultar_arribos(parada, cod_linea):
     global csrf_token
@@ -64,12 +72,14 @@ def consultar_arribos(parada, cod_linea):
     }
     payload = {"IdentificadorParada": parada, "CodigoLinea": str(cod_linea)}
 
-    resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=9)
+    resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=8)
+    
+    # Si el servidor rechaza la credencial, renovamos sesión entera y reintentamos 1 vez
     if resp.status_code in (400, 401, 403, 500):
-        time.sleep(0.5)
+        time.sleep(0.4)
         renovar_token()
         headers["RequestVerificationToken"] = csrf_token
-        resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=9)
+        resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=8)
 
     resp.raise_for_status()
     return resp.json().get("arribos", [])
@@ -123,7 +133,7 @@ HTML_TEMPLATE = """
   <div id="contenido">Cargando arribos...</div>
 
   <div class="bar-fixed">
-    <button id="btn" class="btn-refresh" onclick="pedirDatos(false)">Actualizar</button>
+    <button id="btn" class="btn-refresh" onclick="pedirDatos()">Actualizar</button>
     <div class="status-box">
       <div id="status" class="status-text">Iniciando...</div>
       <div id="hint" class="cached-hint"></div>
@@ -151,7 +161,7 @@ HTML_TEMPLATE = """
       }, 1000);
     }
 
-    async function pedirDatos(forzar = false) {
+    async function pedirDatos() {
       const btn = document.getElementById('btn');
       const status = document.getElementById('status');
       const hint = document.getElementById('hint');
@@ -161,7 +171,7 @@ HTML_TEMPLATE = """
       hint.innerText = "";
 
       try {
-        const res = await fetch('/api/arribos' + (forzar ? '?force=1' : ''));
+        const res = await fetch('/api/arribos');
         const data = await res.json();
         
         if (data.items && data.items.length > 0) {
@@ -170,10 +180,10 @@ HTML_TEMPLATE = """
 
         status.innerText = "Consulta: " + data.hora;
         if (data.from_cache) {
-          hint.innerText = "Datos en memoria (anti-spam)";
+          hint.innerText = "Datos recientes en memoria";
         }
 
-        iniciarCooldown(10);
+        iniciarCooldown(6);
       } catch (err) {
         status.innerText = "Error temporal";
         hint.innerText = "Reintentá en unos segundos";
@@ -215,7 +225,7 @@ HTML_TEMPLATE = """
       document.getElementById('contenido').innerHTML = html;
     }
 
-    pedirDatos(false);
+    pedirDatos();
   </script>
 </body>
 </html>
@@ -245,9 +255,10 @@ def manifest():
 def api_arribos():
     global ultimo_cache
     ahora = time.time()
+    antiguedad = ahora - ultimo_cache["timestamp"]
 
-    # Si se consultó hace menos de 25 segundos, devuelve los datos en memoria al instante
-    if (ahora - ultimo_cache["timestamp"]) < CACHE_TTL and ultimo_cache["items"]:
+    # 1. Si la consulta tiene menos de 20 segundos, devuelve la memoria para proteger la IP
+    if antiguedad < CACHE_TTL and ultimo_cache["items"]:
         return jsonify({
             "hora": ultimo_cache["hora"],
             "items": ultimo_cache["items"],
@@ -255,8 +266,9 @@ def api_arribos():
         })
 
     resultados = []
-    hubo_fallo = False
+    consultas_exitosas = 0
 
+    # 2. Consultar cada parada de forma independiente
     for item in CONSULTAS:
         try:
             arribos_raw = consultar_arribos(item["parada"], item["cod"])
@@ -269,32 +281,31 @@ def api_arribos():
                     "lon": c.get("longitud")
                 })
             resultados.append({**item, "arribos": arribos_limpios})
-            # Pausa breve entre peticiones para no saturar al servidor municipal
-            time.sleep(0.35)
-        except Exception as e:
-            print(f"Error consultando {item['linea']} en parada {item['parada']}: {e}", flush=True)
-            hubo_fallo = True
-            resultados.append({**item, "arribos": []})
+            consultas_exitosas += 1
+            time.sleep(0.3)
+        except Exception:
+            # Si una sola falla, intentamos rescatar los coches de esa parada del caché previo
+            datos_previos = next((x["arribos"] for x in ultimo_cache["items"] if x["parada"] == item["parada"] and x["linea"] == item["linea"]), [])
+            resultados.append({**item, "arribos": datos_previos if antiguedad < MAX_STALE_TTL else []})
 
     hora_actual = obtener_hora_arg()
 
-    # Si todas las consultas fallaron con 500 pero teníamos datos previos válidos, devolver respaldo
-    if hubo_fallo and ultimo_cache["items"]:
+    # Si al menos una consulta anduvo o el caché expiró por completo, renovamos los datos
+    if consultas_exitosas > 0 or antiguedad >= MAX_STALE_TTL:
+        ultimo_cache["timestamp"] = ahora
+        ultimo_cache["hora"] = hora_actual
+        ultimo_cache["items"] = resultados
         return jsonify({
-            "hora": ultimo_cache["hora"],
-            "items": ultimo_cache["items"],
-            "from_cache": True
+            "hora": hora_actual,
+            "items": resultados,
+            "from_cache": False
         })
 
-    # Guardar en memoria
-    ultimo_cache["timestamp"] = ahora
-    ultimo_cache["hora"] = hora_actual
-    ultimo_cache["items"] = resultados
-
+    # Si todo falló pero aún no pasaron 90 segundos, usamos respaldo temporal
     return jsonify({
-        "hora": hora_actual,
-        "items": resultados,
-        "from_cache": False
+        "hora": ultimo_cache["hora"],
+        "items": ultimo_cache["items"],
+        "from_cache": True
     })
 
 if __name__ == '__main__':
