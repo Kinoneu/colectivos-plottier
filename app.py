@@ -1,8 +1,12 @@
 import os
 import re
-from datetime import datetime
+import urllib3
+from datetime import datetime, timezone, timedelta
 from flask import Flask, jsonify, render_template_string
 import requests
+
+# Desactivar advertencias de certificados SSL no verificados
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
@@ -17,14 +21,14 @@ CONSULTAS = [
 
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept-Language": "es-419,es;q=0.9",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "es-419,es;q=0.9,en;q=0.8",
 })
 csrf_token = None
 
 def renovar_token():
     global csrf_token
-    resp = session.get(URL_PAGINA, timeout=10)
+    resp = session.get(URL_PAGINA, verify=False, timeout=12)
     resp.raise_for_status()
     tokens = re.findall(r'CfDJ8[A-Za-z0-9_\-]{80,}', resp.text)
     if tokens:
@@ -32,6 +36,9 @@ def renovar_token():
     else:
         m = re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', resp.text, re.IGNORECASE)
         csrf_token = m.group(1) if m else None
+
+    if not csrf_token:
+        raise Exception("No se pudo extraer el token de seguridad CSRF.")
 
 def consultar_arribos(parada, cod_linea):
     global csrf_token
@@ -48,13 +55,15 @@ def consultar_arribos(parada, cod_linea):
     }
     payload = {"IdentificadorParada": parada, "CodigoLinea": str(cod_linea)}
 
-    resp = session.post(URL_API, json=payload, headers=headers, timeout=10)
+    resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=12)
     if resp.status_code in (400, 401, 403, 500):
+        print(f"Reintentando renovación de sesión tras código {resp.status_code}...", flush=True)
         renovar_token()
         headers["RequestVerificationToken"] = csrf_token
-        resp = session.post(URL_API, json=payload, headers=headers, timeout=10)
+        resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=12)
 
-    return resp.json().get("arribos", []) if resp.status_code == 200 else []
+    resp.raise_for_status()
+    return resp.json().get("arribos", [])
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -64,7 +73,6 @@ HTML_TEMPLATE = """
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Líneas 50A / 50B</title>
   
-  <!-- Configuración PWA (Pantalla completa sin barras) -->
   <meta name="theme-color" content="#181825">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -143,7 +151,9 @@ HTML_TEMPLATE = """
             <span class="stop-tag">Parada ${item.parada}</span>
           </div>`;
 
-        if (item.arribos.length === 0) {
+        if (item.error) {
+          html += `<div class="empty" style="color: #F38BA8;">⚠️ Error de conexión: ${item.error}</div>`;
+        } else if (item.arribos.length === 0) {
           html += `<div class="empty">Sin coches reportando en este momento</div>`;
         } else {
           item.arribos.forEach(c => {
@@ -200,12 +210,17 @@ def api_arribos():
                     "lat": c.get("latitud"),
                     "lon": c.get("longitud")
                 })
-            resultados.append({**item, "arribos": arribos_limpios})
-        except Exception:
-            resultados.append({**item, "arribos": []})
+            resultados.append({**item, "arribos": arribos_limpios, "error": None})
+        except Exception as e:
+            print(f"Error consultando {item['linea']} en parada {item['parada']}: {e}", flush=True)
+            resultados.append({**item, "arribos": [], "error": str(e)})
+
+    # Horario oficial de Argentina (UTC-3)
+    tz_arg = timezone(timedelta(hours=-3))
+    hora = datetime.now(tz_arg).strftime("%H:%M:%S")
 
     return jsonify({
-        "hora": datetime.now().strftime("%H:%M:%S"),
+        "hora": hora,
         "items": resultados
     })
 
