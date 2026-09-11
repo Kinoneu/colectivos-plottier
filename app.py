@@ -110,6 +110,30 @@ HTML_TEMPLATE = """
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
+  /* Créditos de autor */
+    .credits {
+      text-align: center;
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid #313244;
+      font-size: 12px;
+      color: #6C7086;
+      letter-spacing: 0.3px;
+    }
+    .credits .author {
+      color: #CDD6F4;
+      font-weight: 600;
+    }
+    .credits .alias-badge {
+      background: #313244;
+      color: #89B4FA;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      margin-left: 4px;
+      display: inline-block;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background-color: #181825; color: #CDD6F4; padding: 16px 14px 95px; }
     header { margin-bottom: 12px; }
@@ -195,6 +219,10 @@ HTML_TEMPLATE = """
   </div>
 
   <div id="contenido">Cargando cabeceras...</div>
+  <div class="credits">
+    Desarrollado por <span class="author">Ramiro Alzogaray</span>
+    <span class="alias-badge">KaiLoos</span>
+  </div>
 
   <div class="bar-fixed">
     <button id="btn" class="btn-refresh" onclick="pedirDatos()">Actualizar</button>
