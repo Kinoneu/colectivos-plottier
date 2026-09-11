@@ -14,7 +14,6 @@ app = Flask(__name__)
 URL_PAGINA = "https://cuandollega.smartmovepro.net/indalo/recorridos"
 URL_API = f"{URL_PAGINA}?handler=Arribos"
 
-# 3 consultas estratégicas (Cabeceras + Intermedia) para abarcar toda la traza sin saturar
 CONSULTAS = [
     {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "cod": "1014", "mostrar": True},
     {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "cod": "1013", "mostrar": True},
@@ -28,9 +27,9 @@ session.headers.update({
 })
 csrf_token = None
 
-CACHE_TTL = 24        # Segundos mínimos entre escaneos reales a la empresa
-TIEMPO_PERDIDO = 75   # Segundos sin reporte para marcar en rojo (umbral realista)
-TIEMPO_EXPIRAR = 200  # Segundos para retirar definitivamente una unidad inactiva
+CACHE_TTL = 24
+TIEMPO_PERDIDO = 75
+TIEMPO_EXPIRAR = 200
 
 flota_memoria = {}
 ultimo_cache_cabeceras = []
@@ -119,7 +118,7 @@ HTML_TEMPLATE = """
       box-shadow: 0 4px 14px rgba(0,0,0,0.4);
     }
     #map {
-      height: 290px;
+      height: 300px;
       width: 100%;
       background: #11111B;
     }
@@ -136,6 +135,21 @@ HTML_TEMPLATE = """
       color: #CDD6F4;
       border: 1px solid #313244;
       font-weight: 600;
+    }
+    .btn-clear-route {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      z-index: 1000;
+      background: rgba(24, 24, 37, 0.9);
+      border: 1px solid #45475A;
+      color: #CDD6F4;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: none;
     }
 
     .section-title { font-size: 14px; color: #F5E0DC; text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 8px; font-weight: 700; }
@@ -173,7 +187,8 @@ HTML_TEMPLATE = """
     .time-label { font-size: 12px; color: #A6ADC8; }
     .time-val { font-size: 15px; font-weight: 700; color: #A6E3A1; }
     
-    .btn-focus { background: #313244; color: #CDD6F4; border: 1px solid #45475A; font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+    .card-actions { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
+    .btn-action { background: #313244; color: #CDD6F4; border: 1px solid #45475A; font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 8px; cursor: pointer; text-decoration: none; }
     .empty { font-size: 13px; color: #A6ADC8; font-style: italic; padding: 4px 0; }
     
     .credits {
@@ -206,6 +221,7 @@ HTML_TEMPLATE = """
 
     .leaflet-marker-icon {
       transition: transform 1.2s ease-in-out;
+      cursor: pointer;
     }
 
     .bus-marker {
@@ -238,11 +254,12 @@ HTML_TEMPLATE = """
 <body>
   <header>
     <h1>Transporte Plottier</h1>
-    <p class="sub">GPS y arribos en vivo</p>
+    <p class="sub">GPS, recorridos y arribos en vivo</p>
   </header>
 
   <div id="map-container">
     <div class="map-badge" id="bus-count">Sincronizando flota...</div>
+    <button class="btn-clear-route" id="btn-clear" onclick="limpiarRuta()">✕ Quitar recorrido</button>
     <div id="map"></div>
   </div>
 
@@ -264,7 +281,24 @@ HTML_TEMPLATE = """
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
+    // Traza oficial extraída de Smart Move Pro para la línea 50B
+    const TRAZAS_METRICAS = {
+      "50B": {
+        "IDA": [[-7576123.127717475,-4713953.225682237],[-7576127.135219142,-4713960.668571745],[-7576140.270919057,-4714625.541017488],[-7575523.672259552,-4714622.5350375585],[-7575533.913652705,-4715537.968661558],[-7578334.266763101,-4715525.657356469],[-7578412.190406656,-4715517.9270097455],[-7578498.129053549,-4715523.939501133],[-7578494.566829843,-4715600.956967883],[-7579108.493821568,-4715589.933986044],[-7579115.72958847,-4715842.177166955],[-7583422.0127703175,-4715796.366361502],[-7583523.090867958,-4715778.757888199],[-7583546.913238986,-4715779.473679201],[-7583639.5310553275,-4715757.141023744],[-7583717.454698882,-4715733.949472043],[-7583945.325696536,-4715679.120273622],[-7584124.772715694,-4715657.360465009],[-7584513.611697037,-4715650.345799814],[-7584585.078810125,-4715654.067866457],[-7584684.821073875,-4715642.042732994],[-7586734.21289938,-4715629.015521161],[-7586895.51484154,-4715621.7145636035],[-7587297.155564321,-4715619.280912253],[-7588442.187846622,-4715419.723488214],[-7588664.270230753,-4715194.25981618],[-7590284.970697214,-4713564.914808015],[-7590591.87853333,-4714429.581617774],[-7590632.510147468,-4714417.701074614],[-7590624.4951441325,-4713756.849877528],[-7594854.635794276,-4713713.624809864],[-7594851.518848535,-4712383.6136334315],[-7596173.103843232,-4712371.878595528],[-7596505.837801212,-4712371.306155002],[-7596507.062315612,-4712007.097415341],[-7596821.09459914,-4712010.675040777],[-7596824.768142336,-4711714.451925238],[-7597492.351128625,-4711704.291768824],[-7597495.690713347,-4711684.114586941],[-7597586.861376307,-4711683.685285635],[-7597684.154611261,-4711690.840309779],[-7597727.45789318,-4711685.545591426],[-7597782.672360612,-4711685.259390514],[-7597844.788636475,-4711680.966377784],[-7597998.52085326,-4711678.390571015],[-7598051.731569858,-4711679.249173199],[-7598168.394396211,-4711676.244065874],[-7598169.618910611,-4711685.545591426],[-7598514.820651559,-4711685.974892813],[-7598512.816900725,-4712308.0516757555],[-7598463.279727323,-4712301.611762196],[-7598446.470484212,-4712292.166563034],[-7598173.626412278,-4712256.103156181],[-7598125.425072765,-4712247.65975801],[-7598058.85601727,-4712240.361233048],[-7597865.271422781,-4712214.744883052],[-7597575.506788245,-4712170.810846718],[-7597547.676915548,-4712165.9451996675],[-7597528.752602113,-4712163.798591416],[-7597513.947109837,-4712164.943449095],[-7597508.492454789,-4712161.938197968],[-7597509.049052242,-4712127.8787473785],[-7597488.900224409,-4712119.864775614],[-7597477.5456363475,-4712111.850810179],[-7597471.200425373,-4712047.309997799],[-7596829.220921968,-4712055.46701795],[-7596829.220921968,-4712382.75497166],[-7596173.437801706,-4712373.16658683],[-7596170.654814434,-4713035.3588711675],[-7595380.954346748,-4713041.083652457],[-7595378.505317951,-4713714.054197047],[-7594863.763992522,-4713715.342358708],[-7594864.097950994,-4714610.94055188],[-7595153.1946685845,-4714615.807371415],[-7595602.257494444,-4714856.431565999],[-7595629.085491726,-4714867.740041546],[-7595630.866603578,-4714928.720139591],[-7595924.750059273,-4714929.292724408],[-7596190.469683797,-4714997.287401224],[-7596213.178859917,-4715768.307345327],[-7596826.437934698,-4715759.288392326],[-7596826.437934698,-4715656.644682625],[-7597004.326480986,-4715716.341107085],[-7597005.550995384,-4715740.248406765],[-7597262.2537411535,-4715780.332628469]],
+        "VUELTA": [[-7597262.2537411535,-4715780.332628469],[-7597261.585824208,-4715793.78950984],[-7597226.854143082,-4716016.403276067],[-7597064.327686524,-4715986.482556415],[-7596989.4096692195,-4715979.467663623],[-7596961.802435502,-4715989.202618192],[-7596826.66057368,-4715988.773134706],[-7596820.649321177,-4716600.519214987],[-7596475.558899717,-4716534.374985973],[-7596227.093796266,-4716495.71946742],[-7596221.97309969,-4716454.200741217],[-7596218.633514967,-4716119.909604224],[-7596222.084419181,-4715995.358550169],[-7594918.31054301,-4715996.933324063],[-7594907.623871894,-4715503.468414098],[-7594600.827355268,-4715459.233828643],[-7594473.700496783,-4715407.8417855],[-7594294.253477624,-4715367.759035632],[-7594121.374308422,-4715348.004024316],[-7593282.804584275,-4715345.999894883],[-7593272.340552142,-4715328.678506993],[-7588935.667149306,-4715362.032941436],[-7588411.018389199,-4715449.356229109],[-7587310.959181179,-4715648.771079722],[-7584045.624557742,-4715682.126566638],[-7583538.452957686,-4715799.945323227],[-7580364.734275171,-4715848.762487246],[-7580187.402326336,-4715861.64682192],[-7580145.65751729,-4715862.362618769],[-7580125.286050473,-4715872.240620467],[-7579728.988663251,-4715861.074184476],[-7579426.756245745,-4715880.1143968245],[-7579110.608891894,-4715874.388013413],[-7579107.046668188,-4715591.079230352],[-7578495.012107806,-4715600.098033803],[-7578493.787593408,-4715677.688705831],[-7577255.692216804,-4715681.840252981],[-7577108.193891504,-4715689.284410742],[-7576301.684180708,-4715700.021186369],[-7576299.3464714,-4715234.198730027],[-7575988.765092087,-4715237.920643987],[-7575978.078420971,-4713612.4330702275],[-7576128.916330996,-4713616.011261632],[-7576123.127717475,-4713953.225682237]]
+      }
+    };
+
+    // Conversión matemática EPSG:3857 a WGS84 (Lat, Lon)
+    function mercatorALatLon(x, y) {
+      const lon = (x / 20037508.34) * 180;
+      let lat = (y / 20037508.34) * 180;
+      lat = 180 / Math.PI * (2 * Math.atan(Math.exp(lat * Math.PI / 180)) - Math.PI / 2);
+      return [lat, lon];
+    }
+
     let map;
+    let capaRuta = null;
     let marcadores = {};
     let cooldownTimer = null;
 
@@ -276,10 +310,41 @@ HTML_TEMPLATE = """
         maxZoom: 18,
         attribution: '&copy; OpenStreetMap'
       }).addTo(map);
+
+      capaRuta = L.layerGroup().addTo(map);
     }
 
-    function centrarEn(lat, lon) {
+    function mostrarRuta(linea, sentido) {
+      capaRuta.clearLayers();
+      const sentidoClave = (sentido === "Yéndose" || sentido === "IDA") ? "IDA" : "VUELTA";
+
+      if (TRAZAS_METRICAS[linea] && TRAZAS_METRICAS[linea][sentidoClave]) {
+        const puntosMercator = TRAZAS_METRICAS[linea][sentidoClave];
+        const puntosLatLon = puntosMercator.map(p => mercatorALatLon(p[0], p[1]));
+
+        const color = (linea === "50A") ? "#A6E3A1" : "#89B4FA";
+        const poliLinea = L.polyline(puntosLatLon, {
+          color: color,
+          weight: 4,
+          opacity: 0.85,
+          lineJoin: 'round'
+        });
+
+        capaRuta.addLayer(poliLinea);
+        document.getElementById('btn-clear').style.display = 'block';
+      }
+    }
+
+    function limpiarRuta() {
+      capaRuta.clearLayers();
+      document.getElementById('btn-clear').style.display = 'none';
+    }
+
+    function centrarEn(lat, lon, linea, sentido) {
       map.setView([lat, lon], 15, { animate: true });
+      if (linea && sentido) {
+        mostrarRuta(linea, sentido);
+      }
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
@@ -357,6 +422,9 @@ HTML_TEMPLATE = """
             <span style="color: ${estadoColor}; font-weight: 700;">${estadoTexto}</span><br>
             <span style="color: #555; font-size: 12px;">Ramal: ${b.ramal}</span>
             ${tiempoTexto}
+            <div style="margin-top: 8px;">
+              <button style="background: #313244; color: #CDD6F4; border: 1px solid #45475A; padding: 4px 8px; border-radius: 6px; font-size: 11px; cursor: pointer; width: 100%;" onclick="mostrarRuta('${b.linea}', '${b.sentido}')">🗺️ Ver recorrido</button>
+            </div>
           </div>
         `;
 
@@ -367,6 +435,12 @@ HTML_TEMPLATE = """
         } else {
           const marker = L.marker([b.lat, b.lon], { icon: icon });
           marker.bindPopup(contenidoPopup);
+          
+          // Al tocar el coche en el mapa, dibuja su ruta automáticamente
+          marker.on('click', () => {
+            mostrarRuta(b.linea, b.sentido);
+          });
+
           marker.addTo(map);
           marcadores[b.id] = marker;
         }
@@ -403,7 +477,7 @@ HTML_TEMPLATE = """
         } else {
           item.arribos.forEach(c => {
             const botonVer = (c.lat && c.lon) 
-              ? `<button class="btn-focus" onclick="centrarEn(${c.lat}, ${c.lon})">Ver en Mapa</button>` 
+              ? `<button class="btn-action" onclick="centrarEn(${c.lat}, ${c.lon}, '${item.linea}', '${c.sentido}')">Ver en Mapa</button>` 
               : '';
 
             const badgeClass = c.sentido === 'Viniendo' ? 'badge-viniendo' : 'badge-yendose';
@@ -417,7 +491,9 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="time-label">A Cabecera: <span class="time-val">${c.tiempo}</span></div>
               </div>
-              ${botonVer}
+              <div class="card-actions">
+                ${botonVer}
+              </div>
             </div>`;
           });
         }
@@ -430,7 +506,6 @@ HTML_TEMPLATE = """
     initMap();
     pedirDatos();
 
-    // Ciclo de auto-refresco regulado a 30 segundos
     setInterval(pedirDatos, 30000);
   </script>
 </body>
@@ -440,7 +515,7 @@ HTML_TEMPLATE = """
 @app.route('/ping')
 def ping():
     return "OK", 200
-    
+
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE)
@@ -513,7 +588,6 @@ def api_arribos():
                 nuevas_cabeceras.append({**item, "arribos": arribos_limpios})
 
             consultas_ok += 1
-            # Pausa de 500ms entre consultas para evitar bloqueos por ráfaga
             time.sleep(0.5)
         except Exception:
             pass
