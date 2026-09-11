@@ -437,6 +437,10 @@ HTML_TEMPLATE = """
 </html>
 """
 
+@app.route('/ping')
+def ping():
+    return "OK", 200
+    
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE)
