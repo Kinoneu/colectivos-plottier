@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import math
 import urllib3
 from datetime import datetime, timezone, timedelta
 from flask import Flask, jsonify, render_template_string
@@ -14,11 +15,11 @@ URL_PAGINA = "https://cuandollega.smartmovepro.net/indalo/recorridos"
 URL_API = f"{URL_PAGINA}?handler=Arribos"
 
 CONSULTAS = [
-    # 1. Cabeceras oficiales visibles
+    # Cabeceras visibles
     {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "cod": "1014", "mostrar": True},
     {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "cod": "1013", "mostrar": True},
     
-    # 2. Barrido silencioso de flota (Puntos intermedios)
+    # Barrido silencioso para tracking de flota
     {"seccion": "BARRIDO", "parada": "NV1259", "linea": "50B", "cod": "1014", "mostrar": False},
     {"seccion": "BARRIDO", "parada": "NV1058", "linea": "50B", "cod": "1014", "mostrar": False},
     {"seccion": "BARRIDO", "parada": "NV1058", "linea": "50A", "cod": "1013", "mostrar": False},
@@ -31,19 +32,23 @@ session.headers.update({
 })
 csrf_token = None
 
-CACHE_TTL = 18
-MAX_STALE_TTL = 90
+CACHE_TTL = 16
+TIEMPO_PERDIDO = 28   # Segundos sin reporte para marcar en rojo
+TIEMPO_EXPIRAR = 150  # Segundos para purgar unidades inactivas
 
-ultimo_cache = {
-    "timestamp": 0,
-    "hora": "--:--:--",
-    "items": [],
-    "buses": []
-}
+# Memoria persistente de colectivos
+flota_memoria = {}
+ultimo_cache_cabeceras = []
+ultima_hora_sync = "--:--:--"
+ultimo_escaneo_ts = 0
 
 def obtener_hora_arg():
     tz_arg = timezone(timedelta(hours=-3))
     return datetime.now(tz_arg).strftime("%H:%M:%S")
+
+def calcular_distancia(lat1, lon1, lat2, lon2):
+    # Distancia euclidiana aproximada en km
+    return math.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2) * 111.0
 
 def renovar_token():
     global csrf_token, session
@@ -59,7 +64,7 @@ def renovar_token():
         csrf_token = m.group(1) if m else None
 
     if not csrf_token:
-        raise Exception("No se pudo obtener el token CSRF.")
+        raise Exception("No se pudo obtener token CSRF.")
 
 def consultar_arribos(parada, cod_linea):
     global csrf_token
@@ -120,7 +125,7 @@ HTML_TEMPLATE = """
       box-shadow: 0 4px 14px rgba(0,0,0,0.4);
     }
     #map {
-      height: 280px;
+      height: 290px;
       width: 100%;
       background: #11111B;
     }
@@ -153,7 +158,6 @@ HTML_TEMPLATE = """
     .branch-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
     .branch { font-size: 13px; color: #CDD6F4; font-weight: 600; }
     
-    /* Distintivos de Estado */
     .badge-status {
       font-size: 11px;
       font-weight: 700;
@@ -178,7 +182,6 @@ HTML_TEMPLATE = """
     .btn-focus { background: #313244; color: #CDD6F4; border: 1px solid #45475A; font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
     .empty { font-size: 13px; color: #A6ADC8; font-style: italic; padding: 4px 0; }
     
-    /* Créditos de autor */
     .credits {
       text-align: center;
       margin-top: 24px;
@@ -188,10 +191,7 @@ HTML_TEMPLATE = """
       color: #6C7086;
       letter-spacing: 0.3px;
     }
-    .credits .author {
-      color: #CDD6F4;
-      font-weight: 600;
-    }
+    .credits .author { color: #CDD6F4; font-weight: 600; }
     .credits .alias-badge {
       background: #313244;
       color: #89B4FA;
@@ -208,13 +208,18 @@ HTML_TEMPLATE = """
     .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
     .status-box { text-align: right; }
     .status-text { font-size: 12px; color: #A6ADC8; font-weight: 500; }
-    .cached-hint { font-size: 10px; color: #FAB387; }
+    .cached-hint { font-size: 10px; color: #A6E3A1; }
+
+    /* Transición suave para desplazamiento de colectivos */
+    .leaflet-marker-icon {
+      transition: transform 1.2s ease-in-out;
+    }
 
     .bus-marker {
       display: flex;
       align-items: center;
-      gap: 3px;
-      padding: 3px 6px;
+      gap: 4px;
+      padding: 3px 7px;
       border-radius: 8px;
       font-size: 11px;
       font-weight: 800;
@@ -223,16 +228,29 @@ HTML_TEMPLATE = """
     }
     .bus-marker-50b { background-color: #1E2D42; border: 2px solid #89B4FA; color: #89B4FA; }
     .bus-marker-50a { background-color: #1E3A24; border: 2px solid #A6E3A1; color: #A6E3A1; }
+    
+    /* Estado: Conexión perdida */
+    .bus-marker-lost {
+      background-color: #381A22 !important;
+      border: 2px solid #F38BA8 !important;
+      color: #F38BA8 !important;
+      animation: pulse-lost 1.5s infinite;
+    }
+    @keyframes pulse-lost {
+      0% { opacity: 1; }
+      50% { opacity: 0.55; }
+      100% { opacity: 1; }
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>Transporte Plottier</h1>
-    <p class="sub">GPS y arribos a Cabecera en tiempo real</p>
+    <p class="sub">GPS y arribos en vivo</p>
   </header>
 
   <div id="map-container">
-    <div class="map-badge" id="bus-count">Buscando coches...</div>
+    <div class="map-badge" id="bus-count">Buscando flota...</div>
     <div id="map"></div>
   </div>
 
@@ -247,14 +265,15 @@ HTML_TEMPLATE = """
     <button id="btn" class="btn-refresh" onclick="pedirDatos()">Actualizar</button>
     <div class="status-box">
       <div id="status" class="status-text">Iniciando...</div>
-      <div id="hint" class="cached-hint"></div>
+      <div id="hint" class="cached-hint">Auto-refresco: Activo (20s)</div>
     </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
-    let map, busLayer;
+    let map;
+    let marcadores = {};
     let cooldownTimer = null;
 
     function initMap() {
@@ -265,8 +284,6 @@ HTML_TEMPLATE = """
         maxZoom: 18,
         attribution: '&copy; OpenStreetMap'
       }).addTo(map);
-
-      busLayer = L.layerGroup().addTo(map);
     }
 
     function centrarEn(lat, lon) {
@@ -293,13 +310,7 @@ HTML_TEMPLATE = """
     }
 
     async function pedirDatos() {
-      const btn = document.getElementById('btn');
       const status = document.getElementById('status');
-      const hint = document.getElementById('hint');
-      
-      btn.disabled = true;
-      status.innerText = "Consultando...";
-      hint.innerText = "";
 
       try {
         const res = await fetch('/api/arribos');
@@ -308,59 +319,76 @@ HTML_TEMPLATE = """
         renderTarjetas(data.items);
         actualizarMapa(data.buses);
 
-        status.innerText = "Consulta: " + data.hora;
-        if (data.from_cache) {
-          hint.innerText = "Datos recientes en memoria";
-        }
-
-        iniciarCooldown(6);
+        status.innerText = "Actualizado: " + data.hora;
+        iniciarCooldown(5);
       } catch (err) {
-        status.innerText = "Error temporal";
-        hint.innerText = "Reintentá en unos segundos";
-        btn.disabled = false;
-        btn.innerText = "Reintentar";
+        status.innerText = "Reintentando sincronización...";
       }
     }
 
     function actualizarMapa(buses) {
-      busLayer.clearLayers();
       const countLabel = document.getElementById('bus-count');
-
       if (!buses || buses.length === 0) {
-        countLabel.innerText = "Sin coches activos con GPS";
+        countLabel.innerText = "Sin unidades reportando";
         return;
       }
 
-      countLabel.innerText = `🚌 ${buses.length} coche(s) en circulación`;
+      const activos = buses.filter(b => b.estado === 'activo').length;
+      const perdidos = buses.filter(b => b.estado === 'perdido').length;
+      countLabel.innerText = `🚌 ${activos} en camino${perdidos > 0 ? ' | ⚠️ ' + perdidos + ' con señal débil' : ''}`;
+
+      const idsRecibidos = new Set();
 
       buses.forEach(b => {
-        const es50A = b.linea === "50A";
-        const claseCss = es50A ? "bus-marker-50a" : "bus-marker-50b";
-        
+        idsRecibidos.add(b.id);
+        const esPerdido = (b.estado === 'perdido');
+        let claseCss = (b.linea === "50A") ? "bus-marker-50a" : "bus-marker-50b";
+        if (esPerdido) claseCss = "bus-marker-lost";
+
+        const iconoHtml = `<div class="bus-marker ${claseCss}">${esPerdido ? '⚠️' : '🚌'} ${b.linea}</div>`;
         const icon = L.divIcon({
           className: 'custom-icon',
-          html: `<div class="bus-marker ${claseCss}">🚌 ${b.linea}</div>`,
-          iconSize: [52, 24],
-          iconAnchor: [26, 12]
+          html: iconoHtml,
+          iconSize: [58, 24],
+          iconAnchor: [29, 12]
         });
 
-        const marker = L.marker([b.lat, b.lon], { icon: icon });
-        const estadoColor = b.sentido === 'Viniendo' ? '#2ecc71' : '#e67e22';
-        const estadoTexto = b.sentido === 'Viniendo' ? '🟢 Viniendo hacia Cabecera' : '🟠 Yéndose de Cabecera';
+        const estadoColor = esPerdido ? '#e74c3c' : (b.sentido === 'Viniendo' ? '#2ecc71' : '#e67e22');
+        const estadoTexto = esPerdido ? '⚠️ Señal perdida (última pos.)' : (b.sentido === 'Viniendo' ? '🟢 Viniendo hacia Cabecera' : '🟠 Yéndose de Cabecera');
         const tiempoTexto = b.tiempo_cabecera 
           ? `<div style="color: #27ae60; font-weight: bold; margin-top: 4px;">⏱️ Arribo a Cabecera: ${b.tiempo_cabecera}</div>` 
           : `<div style="color: #7f8c8d; font-style: italic; margin-top: 4px;">📍 En trayecto intermedio</div>`;
 
-        marker.bindPopup(`
-          <div style="font-family: sans-serif; font-size: 13px; line-height: 1.4; min-width: 170px;">
+        const contenidoPopup = `
+          <div style="font-family: sans-serif; font-size: 13px; line-height: 1.4; min-width: 175px;">
             <strong style="color: #111; font-size: 14px;">Línea ${b.linea}</strong><br>
             <span style="color: ${estadoColor}; font-weight: 700;">${estadoTexto}</span><br>
             <span style="color: #555; font-size: 12px;">Ramal: ${b.ramal}</span>
             ${tiempoTexto}
           </div>
-        `);
-        busLayer.addLayer(marker);
+        `;
+
+        if (marcadores[b.id]) {
+          // Desplazamiento fluido sin parpadear
+          marcadores[b.id].setLatLng([b.lat, b.lon]);
+          marcadores[b.id].setIcon(icon);
+          marcadores[b.id].getPopup().setContent(contenidoPopup);
+        } else {
+          // Nuevo coche detectado
+          const marker = L.marker([b.lat, b.lon], { icon: icon });
+          marker.bindPopup(contenidoPopup);
+          marker.addTo(map);
+          marcadores[b.id] = marker;
+        }
       });
+
+      // Remover unidades purgadas
+      for (let id in marcadores) {
+        if (!idsRecibidos.has(id)) {
+          map.removeLayer(marcadores[id]);
+          delete marcadores[id];
+        }
+      }
     }
 
     function renderTarjetas(items) {
@@ -412,6 +440,10 @@ HTML_TEMPLATE = """
 
     initMap();
     pedirDatos();
+
+    // Auto-refresco didáctico cada 20 segundos
+    // Mantiene viva la aplicación y actualiza el tráfico de forma continua
+    setInterval(pedirDatos, 20000);
   </script>
 </body>
 </html>
@@ -439,21 +471,20 @@ def manifest():
 
 @app.route('/api/arribos')
 def api_arribos():
-    global ultimo_cache
+    global flota_memoria, ultimo_cache_cabeceras, ultima_hora_sync, ultimo_escaneo_ts
     ahora = time.time()
-    antiguedad = ahora - ultimo_cache["timestamp"]
 
-    if antiguedad < CACHE_TTL and ultimo_cache["items"]:
+    # Si pasaron menos de 16 segundos, entregamos la memoria para evitar saturar el servidor municipal
+    if (ahora - ultimo_escaneo_ts) < CACHE_TTL and ultimo_cache_cabeceras:
         return jsonify({
-            "hora": ultimo_cache["hora"],
-            "items": ultimo_cache["items"],
-            "buses": ultimo_cache["buses"],
+            "hora": ultima_hora_sync,
+            "items": ultimo_cache_cabeceras,
+            "buses": serializar_flota(ahora),
             "from_cache": True
         })
 
-    resultados_visibles = []
-    buses_detectados = {}
-    consultas_exitosas = 0
+    nuevas_cabeceras = []
+    consultas_ok = 0
 
     for item in CONSULTAS:
         try:
@@ -467,16 +498,9 @@ def api_arribos():
                 tiempo = c.get("tiempoRestanteArribo", "Sin datos")
                 ramal = c.get("descripcionBandera", item["linea"])
 
-                # Criterio de dirección según ramal
                 ramal_upper = str(ramal).upper()
-                if "IDA" in ramal_upper:
-                    sentido = "Yéndose"
-                elif "VUELTA" in ramal_upper:
-                    sentido = "Viniendo"
-                else:
-                    sentido = "Viniendo" if es_cabecera else "Yéndose"
+                sentido = "Yéndose" if "IDA" in ramal_upper else "Viniendo"
 
-                # Guardar para las tarjetas visibles de Cabecera
                 if item["mostrar"]:
                     arribos_limpios.append({
                         "tiempo": tiempo,
@@ -486,61 +510,84 @@ def api_arribos():
                         "lon": lon
                     })
 
-                # Deduplicar coordenadas satelitales para el mapa
                 if lat and lon and str(lat).strip() and str(lon).strip():
                     try:
-                        coord_key = f"{round(float(lat), 3)}_{round(float(lon), 3)}"
-                        tiempo_cab = tiempo if es_cabecera else None
-
-                        if coord_key not in buses_detectados:
-                            buses_detectados[coord_key] = {
-                                "linea": item["linea"],
-                                "ramal": ramal,
-                                "sentido": sentido,
-                                "tiempo_cabecera": tiempo_cab,
-                                "lat": float(lat),
-                                "lon": float(lon)
-                            }
-                        else:
-                            # Si ya fue detectado por barrido, priorizamos los datos de Cabecera
-                            if es_cabecera:
-                                buses_detectados[coord_key]["tiempo_cabecera"] = tiempo_cab
-                                buses_detectados[coord_key]["sentido"] = sentido
-                                buses_detectados[coord_key]["ramal"] = ramal
+                        f_lat = float(lat)
+                        f_lon = float(lon)
+                        vincular_o_crear_colectivo(item["linea"], ramal, sentido, tiempo, es_cabecera, f_lat, f_lon, ahora)
                     except ValueError:
                         pass
 
             if item["mostrar"]:
-                resultados_visibles.append({**item, "arribos": arribos_limpios})
+                nuevas_cabeceras.append({**item, "arribos": arribos_limpios})
 
-            consultas_exitosas += 1
+            consultas_ok += 1
             time.sleep(0.25)
         except Exception:
-            if item["mostrar"]:
-                datos_previos = next((x["arribos"] for x in ultimo_cache["items"] if x["parada"] == item["parada"] and x["linea"] == item["linea"]), [])
-                resultados_visibles.append({**item, "arribos": datos_previos if antiguedad < MAX_STALE_TTL else []})
+            pass
 
-    hora_actual = obtener_hora_arg()
-    lista_buses = list(buses_detectados.values())
+    # Purgar colectivos que llevan más de 2.5 minutos sin emitir señal
+    flota_memoria = {k: v for k, v in flota_memoria.items() if (ahora - v["last_seen"]) < TIEMPO_EXPIRAR}
 
-    if consultas_exitosas > 0 or antiguedad >= MAX_STALE_TTL:
-        ultimo_cache["timestamp"] = ahora
-        ultimo_cache["hora"] = hora_actual
-        ultimo_cache["items"] = resultados_visibles
-        ultimo_cache["buses"] = lista_buses
-        return jsonify({
-            "hora": hora_actual,
-            "items": resultados_visibles,
-            "buses": lista_buses,
-            "from_cache": False
-        })
+    if consultas_ok > 0 or not ultimo_cache_cabeceras:
+        ultimo_cache_cabeceras = nuevas_cabeceras
+        ultima_hora_sync = obtener_hora_arg()
+        ultimo_escaneo_ts = ahora
 
     return jsonify({
-        "hora": ultimo_cache["hora"],
-        "items": ultimo_cache["items"],
-        "buses": ultimo_cache["buses"],
-        "from_cache": True
+        "hora": ultima_hora_sync,
+        "items": ultimo_cache_cabeceras,
+        "buses": serializar_flota(ahora),
+        "from_cache": False
     })
+
+def vincular_o_crear_colectivo(linea, ramal, sentido, tiempo, es_cabecera, lat, lon, ahora):
+    # Buscar si ya existe este colectivo en la misma línea a menos de 2.2 km
+    bus_existente_id = None
+    for bus_id, datos in flota_memoria.items():
+        if datos["linea"] == linea:
+            dist = calcular_distancia(datos["lat"], datos["lon"], lat, lon)
+            if dist < 2.2:
+                bus_existente_id = bus_id
+                break
+
+    if bus_existente_id:
+        flota_memoria[bus_existente_id]["lat"] = lat
+        flota_memoria[bus_existente_id]["lon"] = lon
+        flota_memoria[bus_existente_id]["last_seen"] = ahora
+        flota_memoria[bus_existente_id]["ramal"] = ramal
+        flota_memoria[bus_existente_id]["sentido"] = sentido
+        if es_cabecera:
+            flota_memoria[bus_existente_id]["tiempo_cabecera"] = tiempo
+    else:
+        nuevo_id = f"{linea}_{round(lat, 3)}_{round(lon, 3)}"
+        flota_memoria[nuevo_id] = {
+            "id": nuevo_id,
+            "linea": linea,
+            "ramal": ramal,
+            "sentido": sentido,
+            "tiempo_cabecera": tiempo if es_cabecera else None,
+            "lat": lat,
+            "lon": lon,
+            "last_seen": ahora
+        }
+
+def serializar_flota(ahora):
+    lista = []
+    for bus_id, datos in flota_memoria.items():
+        inactivo = ahora - datos["last_seen"]
+        estado = "perdido" if inactivo > TIEMPO_PERDIDO else "activo"
+        lista.append({
+            "id": datos["id"],
+            "linea": datos["linea"],
+            "ramal": datos["ramal"],
+            "sentido": datos["sentido"],
+            "tiempo_cabecera": datos["tiempo_cabecera"],
+            "lat": datos["lat"],
+            "lon": datos["lon"],
+            "estado": estado
+        })
+    return lista
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
