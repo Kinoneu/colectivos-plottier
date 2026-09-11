@@ -14,15 +14,11 @@ app = Flask(__name__)
 URL_PAGINA = "https://cuandollega.smartmovepro.net/indalo/recorridos"
 URL_API = f"{URL_PAGINA}?handler=Arribos"
 
+# 3 consultas estratégicas (Cabeceras + Intermedia) para abarcar toda la traza sin saturar
 CONSULTAS = [
-    # Cabeceras visibles
     {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "cod": "1014", "mostrar": True},
     {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "cod": "1013", "mostrar": True},
-    
-    # Barrido silencioso para tracking de flota
-    {"seccion": "BARRIDO", "parada": "NV1259", "linea": "50B", "cod": "1014", "mostrar": False},
-    {"seccion": "BARRIDO", "parada": "NV1058", "linea": "50B", "cod": "1014", "mostrar": False},
-    {"seccion": "BARRIDO", "parada": "NV1058", "linea": "50A", "cod": "1013", "mostrar": False},
+    {"seccion": "BARRIDO",  "parada": "NV1058", "linea": "50B", "cod": "1014", "mostrar": False},
 ]
 
 session = requests.Session()
@@ -32,11 +28,10 @@ session.headers.update({
 })
 csrf_token = None
 
-CACHE_TTL = 16
-TIEMPO_PERDIDO = 28   # Segundos sin reporte para marcar en rojo
-TIEMPO_EXPIRAR = 150  # Segundos para purgar unidades inactivas
+CACHE_TTL = 24        # Segundos mínimos entre escaneos reales a la empresa
+TIEMPO_PERDIDO = 75   # Segundos sin reporte para marcar en rojo (umbral realista)
+TIEMPO_EXPIRAR = 200  # Segundos para retirar definitivamente una unidad inactiva
 
-# Memoria persistente de colectivos
 flota_memoria = {}
 ultimo_cache_cabeceras = []
 ultima_hora_sync = "--:--:--"
@@ -47,7 +42,6 @@ def obtener_hora_arg():
     return datetime.now(tz_arg).strftime("%H:%M:%S")
 
 def calcular_distancia(lat1, lon1, lat2, lon2):
-    # Distancia euclidiana aproximada en km
     return math.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2) * 111.0
 
 def renovar_token():
@@ -81,12 +75,12 @@ def consultar_arribos(parada, cod_linea):
     }
     payload = {"IdentificadorParada": parada, "CodigoLinea": str(cod_linea)}
 
-    resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=8)
+    resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=9)
     if resp.status_code in (400, 401, 403, 500):
-        time.sleep(0.3)
+        time.sleep(0.5)
         renovar_token()
         headers["RequestVerificationToken"] = csrf_token
-        resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=8)
+        resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=9)
 
     resp.raise_for_status()
     return resp.json().get("arribos", [])
@@ -210,7 +204,6 @@ HTML_TEMPLATE = """
     .status-text { font-size: 12px; color: #A6ADC8; font-weight: 500; }
     .cached-hint { font-size: 10px; color: #A6E3A1; }
 
-    /* Transición suave para desplazamiento de colectivos */
     .leaflet-marker-icon {
       transition: transform 1.2s ease-in-out;
     }
@@ -229,7 +222,6 @@ HTML_TEMPLATE = """
     .bus-marker-50b { background-color: #1E2D42; border: 2px solid #89B4FA; color: #89B4FA; }
     .bus-marker-50a { background-color: #1E3A24; border: 2px solid #A6E3A1; color: #A6E3A1; }
     
-    /* Estado: Conexión perdida */
     .bus-marker-lost {
       background-color: #381A22 !important;
       border: 2px solid #F38BA8 !important;
@@ -250,7 +242,7 @@ HTML_TEMPLATE = """
   </header>
 
   <div id="map-container">
-    <div class="map-badge" id="bus-count">Buscando flota...</div>
+    <div class="map-badge" id="bus-count">Sincronizando flota...</div>
     <div id="map"></div>
   </div>
 
@@ -265,7 +257,7 @@ HTML_TEMPLATE = """
     <button id="btn" class="btn-refresh" onclick="pedirDatos()">Actualizar</button>
     <div class="status-box">
       <div id="status" class="status-text">Iniciando...</div>
-      <div id="hint" class="cached-hint">Auto-refresco: Activo (20s)</div>
+      <div id="hint" class="cached-hint">Auto-refresco: Activo (30s)</div>
     </div>
   </div>
 
@@ -320,7 +312,7 @@ HTML_TEMPLATE = """
         actualizarMapa(data.buses);
 
         status.innerText = "Actualizado: " + data.hora;
-        iniciarCooldown(5);
+        iniciarCooldown(6);
       } catch (err) {
         status.innerText = "Reintentando sincronización...";
       }
@@ -369,12 +361,10 @@ HTML_TEMPLATE = """
         `;
 
         if (marcadores[b.id]) {
-          // Desplazamiento fluido sin parpadear
           marcadores[b.id].setLatLng([b.lat, b.lon]);
           marcadores[b.id].setIcon(icon);
           marcadores[b.id].getPopup().setContent(contenidoPopup);
         } else {
-          // Nuevo coche detectado
           const marker = L.marker([b.lat, b.lon], { icon: icon });
           marker.bindPopup(contenidoPopup);
           marker.addTo(map);
@@ -382,7 +372,6 @@ HTML_TEMPLATE = """
         }
       });
 
-      // Remover unidades purgadas
       for (let id in marcadores) {
         if (!idsRecibidos.has(id)) {
           map.removeLayer(marcadores[id]);
@@ -441,9 +430,8 @@ HTML_TEMPLATE = """
     initMap();
     pedirDatos();
 
-    // Auto-refresco didáctico cada 20 segundos
-    // Mantiene viva la aplicación y actualiza el tráfico de forma continua
-    setInterval(pedirDatos, 20000);
+    // Ciclo de auto-refresco regulado a 30 segundos
+    setInterval(pedirDatos, 30000);
   </script>
 </body>
 </html>
@@ -474,7 +462,6 @@ def api_arribos():
     global flota_memoria, ultimo_cache_cabeceras, ultima_hora_sync, ultimo_escaneo_ts
     ahora = time.time()
 
-    # Si pasaron menos de 16 segundos, entregamos la memoria para evitar saturar el servidor municipal
     if (ahora - ultimo_escaneo_ts) < CACHE_TTL and ultimo_cache_cabeceras:
         return jsonify({
             "hora": ultima_hora_sync,
@@ -522,11 +509,11 @@ def api_arribos():
                 nuevas_cabeceras.append({**item, "arribos": arribos_limpios})
 
             consultas_ok += 1
-            time.sleep(0.25)
+            # Pausa de 500ms entre consultas para evitar bloqueos por ráfaga
+            time.sleep(0.5)
         except Exception:
             pass
 
-    # Purgar colectivos que llevan más de 2.5 minutos sin emitir señal
     flota_memoria = {k: v for k, v in flota_memoria.items() if (ahora - v["last_seen"]) < TIEMPO_EXPIRAR}
 
     if consultas_ok > 0 or not ultimo_cache_cabeceras:
@@ -542,12 +529,11 @@ def api_arribos():
     })
 
 def vincular_o_crear_colectivo(linea, ramal, sentido, tiempo, es_cabecera, lat, lon, ahora):
-    # Buscar si ya existe este colectivo en la misma línea a menos de 2.2 km
     bus_existente_id = None
     for bus_id, datos in flota_memoria.items():
         if datos["linea"] == linea:
             dist = calcular_distancia(datos["lat"], datos["lon"], lat, lon)
-            if dist < 2.2:
+            if dist < 2.5:
                 bus_existente_id = bus_id
                 break
 
