@@ -10,19 +10,15 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# Servidor oficial estable de producción
 URL_PAGINA = "https://cuandollega.smartmovepro.net/indalo/recorridos"
 URL_API = f"{URL_PAGINA}?handler=Arribos"
 
-# Paradas de consulta
-# 'mostrar: True'  -> Se visualiza en las tarjetas públicas (Cabeceras)
-# 'mostrar: False' -> Solo se usa en segundo plano para barrer el GPS de toda la flota
 CONSULTAS = [
-    # 1. Cabeceras públicas visibles
+    # 1. Cabeceras oficiales visibles
     {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "cod": "1014", "mostrar": True},
     {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "cod": "1013", "mostrar": True},
     
-    # 2. Barrido silencioso de GPS (Parada de casa e intermedia NV1058)
+    # 2. Barrido silencioso de flota (Puntos intermedios)
     {"seccion": "BARRIDO", "parada": "NV1259", "linea": "50B", "cod": "1014", "mostrar": False},
     {"seccion": "BARRIDO", "parada": "NV1058", "linea": "50B", "cod": "1014", "mostrar": False},
     {"seccion": "BARRIDO", "parada": "NV1058", "linea": "50A", "cod": "1013", "mostrar": False},
@@ -35,8 +31,8 @@ session.headers.update({
 })
 csrf_token = None
 
-CACHE_TTL = 18       # Segundos mínimos para proteger la IP
-MAX_STALE_TTL = 90   # Margen máximo de respaldo
+CACHE_TTL = 18
+MAX_STALE_TTL = 90
 
 ultimo_cache = {
     "timestamp": 0,
@@ -106,11 +102,83 @@ HTML_TEMPLATE = """
   <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1048/1048314.png">
   <link rel="icon" type="image/png" href="https://cdn-icons-png.flaticon.com/512/1048/1048314.png">
 
-  <!-- Hoja de estilos del mapa Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
-  /* Créditos de autor */
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: #181825; color: #CDD6F4; padding: 16px 14px 95px; }
+    header { margin-bottom: 12px; }
+    h1 { font-size: 22px; color: #89B4FA; font-weight: 800; }
+    .sub { font-size: 13px; color: #A6ADC8; margin-top: 2px; }
+    
+    #map-container {
+      position: relative;
+      margin-bottom: 16px;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid #313244;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+    }
+    #map {
+      height: 280px;
+      width: 100%;
+      background: #11111B;
+    }
+    .map-badge {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(24, 24, 37, 0.9);
+      backdrop-filter: blur(6px);
+      padding: 5px 12px;
+      border-radius: 8px;
+      font-size: 11px;
+      color: #CDD6F4;
+      border: 1px solid #313244;
+      font-weight: 600;
+    }
+
+    .section-title { font-size: 14px; color: #F5E0DC; text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 8px; font-weight: 700; }
+    .card { background: #1E1E2E; border: 1px solid #313244; border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .line-tag { background: #313244; font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
+    .line-50b { color: #89B4FA; }
+    .line-50a { color: #A6E3A1; }
+    .stop-tag { font-size: 12px; color: #6C7086; }
+    
+    .arrival-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-top: 1px solid #2A2B3D; }
+    .arrival-row:first-of-type { border-top: none; }
+    
+    .branch-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .branch { font-size: 13px; color: #CDD6F4; font-weight: 600; }
+    
+    /* Distintivos de Estado */
+    .badge-status {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      display: inline-block;
+    }
+    .badge-viniendo {
+      background: rgba(166, 227, 161, 0.15);
+      color: #A6E3A1;
+      border: 1px solid rgba(166, 227, 161, 0.3);
+    }
+    .badge-yendose {
+      background: rgba(250, 179, 135, 0.15);
+      color: #FAB387;
+      border: 1px solid rgba(250, 179, 135, 0.3);
+    }
+
+    .time-label { font-size: 12px; color: #A6ADC8; }
+    .time-val { font-size: 15px; font-weight: 700; color: #A6E3A1; }
+    
+    .btn-focus { background: #313244; color: #CDD6F4; border: 1px solid #45475A; font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+    .empty { font-size: 13px; color: #A6ADC8; font-style: italic; padding: 4px 0; }
+    
+    /* Créditos de autor */
     .credits {
       text-align: center;
       margin-top: 24px;
@@ -134,55 +202,7 @@ HTML_TEMPLATE = """
       margin-left: 4px;
       display: inline-block;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: #181825; color: #CDD6F4; padding: 16px 14px 95px; }
-    header { margin-bottom: 12px; }
-    h1 { font-size: 22px; color: #89B4FA; font-weight: 800; }
-    .sub { font-size: 13px; color: #A6ADC8; margin-top: 2px; }
-    
-    /* Contenedor del Mapa */
-    #map-container {
-      position: relative;
-      margin-bottom: 16px;
-      border-radius: 14px;
-      overflow: hidden;
-      border: 1px solid #313244;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.4);
-    }
-    #map {
-      height: 280px;
-      width: 100%;
-      background: #11111B;
-    }
-    .map-badge {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      z-index: 1000;
-      background: rgba(24, 24, 37, 0.85);
-      backdrop-filter: blur(6px);
-      padding: 4px 10px;
-      border-radius: 8px;
-      font-size: 11px;
-      color: #CDD6F4;
-      border: 1px solid #313244;
-      font-weight: 600;
-    }
 
-    .section-title { font-size: 14px; color: #F5E0DC; text-transform: uppercase; letter-spacing: 1px; margin: 12px 0 8px; font-weight: 700; }
-    .card { background: #1E1E2E; border: 1px solid #313244; border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
-    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-    .line-tag { background: #313244; font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
-    .line-50b { color: #89B4FA; }
-    .line-50a { color: #A6E3A1; }
-    .stop-tag { font-size: 12px; color: #6C7086; }
-    .arrival-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-top: 1px solid #2A2B3D; }
-    .arrival-row:first-of-type { border-top: none; }
-    .time { font-size: 15px; font-weight: 700; color: #A6E3A1; }
-    .branch { font-size: 13px; color: #CDD6F4; margin-bottom: 2px; }
-    .btn-focus { background: #313244; color: #CDD6F4; border: 1px solid #45475A; font-size: 11px; font-weight: 600; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
-    .empty { font-size: 13px; color: #A6ADC8; font-style: italic; padding: 4px 0; }
-    
     .bar-fixed { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(24, 24, 37, 0.96); backdrop-filter: blur(10px); padding: 12px 16px; border-top: 1px solid #313244; display: flex; justify-content: space-between; align-items: center; z-index: 2000; }
     .btn-refresh { background: #89B4FA; color: #11111B; border: none; font-size: 15px; font-weight: 700; padding: 12px 20px; border-radius: 12px; cursor: pointer; min-width: 125px; }
     .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -190,7 +210,6 @@ HTML_TEMPLATE = """
     .status-text { font-size: 12px; color: #A6ADC8; font-weight: 500; }
     .cached-hint { font-size: 10px; color: #FAB387; }
 
-    /* Marcador personalizado de Colectivos */
     .bus-marker {
       display: flex;
       align-items: center;
@@ -209,16 +228,16 @@ HTML_TEMPLATE = """
 <body>
   <header>
     <h1>Transporte Plottier</h1>
-    <p class="sub">GPS y arribos en tiempo real</p>
+    <p class="sub">GPS y arribos a Cabecera en tiempo real</p>
   </header>
 
-  <!-- Visor de Mapa en Vivo -->
   <div id="map-container">
     <div class="map-badge" id="bus-count">Buscando coches...</div>
     <div id="map"></div>
   </div>
 
   <div id="contenido">Cargando cabeceras...</div>
+
   <div class="credits">
     Desarrollado por <span class="author">Ramiro Alzogaray</span>
     <span class="alias-badge">KaiLoos</span>
@@ -232,14 +251,12 @@ HTML_TEMPLATE = """
     </div>
   </div>
 
-  <!-- Librería Leaflet -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
     let map, busLayer;
     let cooldownTimer = null;
 
-    // Inicializar mapa centrado en el corredor Plottier - Neuquén
     function initMap() {
       map = L.map('map', { zoomControl: false }).setView([-38.955, -68.16], 12);
       L.control.zoom({ position: 'topright' }).addTo(map);
@@ -328,11 +345,18 @@ HTML_TEMPLATE = """
         });
 
         const marker = L.marker([b.lat, b.lon], { icon: icon });
+        const estadoColor = b.sentido === 'Viniendo' ? '#2ecc71' : '#e67e22';
+        const estadoTexto = b.sentido === 'Viniendo' ? '🟢 Viniendo hacia Cabecera' : '🟠 Yéndose de Cabecera';
+        const tiempoTexto = b.tiempo_cabecera 
+          ? `<div style="color: #27ae60; font-weight: bold; margin-top: 4px;">⏱️ Arribo a Cabecera: ${b.tiempo_cabecera}</div>` 
+          : `<div style="color: #7f8c8d; font-style: italic; margin-top: 4px;">📍 En trayecto intermedio</div>`;
+
         marker.bindPopup(`
-          <div style="font-family: sans-serif; font-size: 13px; line-height: 1.4;">
-            <strong style="color: #111;">Línea ${b.linea}</strong><br>
-            <span>${b.ramal}</span><br>
-            <span style="color: #2b8a3e; font-weight: bold;">${b.tiempo}</span>
+          <div style="font-family: sans-serif; font-size: 13px; line-height: 1.4; min-width: 170px;">
+            <strong style="color: #111; font-size: 14px;">Línea ${b.linea}</strong><br>
+            <span style="color: ${estadoColor}; font-weight: 700;">${estadoTexto}</span><br>
+            <span style="color: #555; font-size: 12px;">Ramal: ${b.ramal}</span>
+            ${tiempoTexto}
           </div>
         `);
         busLayer.addLayer(marker);
@@ -354,21 +378,27 @@ HTML_TEMPLATE = """
         html += `<div class="card">
           <div class="card-header">
             <span class="line-tag ${tagClase}">Línea ${item.linea}</span>
-            <span class="stop-tag">Parada ${item.parada}</span>
+            <span class="stop-tag">Cabecera ${item.parada}</span>
           </div>`;
 
         if (!item.arribos || item.arribos.length === 0) {
-          html += `<div class="empty">Sin unidades reportando en este momento</div>`;
+          html += `<div class="empty">Sin unidades reportando hacia cabecera</div>`;
         } else {
           item.arribos.forEach(c => {
             const botonVer = (c.lat && c.lon) 
               ? `<button class="btn-focus" onclick="centrarEn(${c.lat}, ${c.lon})">Ver en Mapa</button>` 
               : '';
 
+            const badgeClass = c.sentido === 'Viniendo' ? 'badge-viniendo' : 'badge-yendose';
+            const badgeIcon = c.sentido === 'Viniendo' ? '🟢' : '🟠';
+
             html += `<div class="arrival-row">
               <div>
-                <div class="branch">${c.ramal}</div>
-                <div class="time">• ${c.tiempo}</div>
+                <div class="branch-row">
+                  <span class="branch">${c.ramal}</span>
+                  <span class="badge-status ${badgeClass}">${badgeIcon} ${c.sentido}</span>
+                </div>
+                <div class="time-label">A Cabecera: <span class="time-val">${c.tiempo}</span></div>
               </div>
               ${botonVer}
             </div>`;
@@ -425,11 +455,11 @@ def api_arribos():
     buses_detectados = {}
     consultas_exitosas = 0
 
-    # Barrido ordenado de las 5 consultas
     for item in CONSULTAS:
         try:
             arribos_raw = consultar_arribos(item["parada"], item["cod"])
             arribos_limpios = []
+            es_cabecera = (item["seccion"] == "CABECERA")
 
             for c in arribos_raw:
                 lat = c.get("latitud")
@@ -437,28 +467,46 @@ def api_arribos():
                 tiempo = c.get("tiempoRestanteArribo", "Sin datos")
                 ramal = c.get("descripcionBandera", item["linea"])
 
-                # Guardar para la tarjeta si corresponde
+                # Criterio de dirección según ramal
+                ramal_upper = str(ramal).upper()
+                if "IDA" in ramal_upper:
+                    sentido = "Yéndose"
+                elif "VUELTA" in ramal_upper:
+                    sentido = "Viniendo"
+                else:
+                    sentido = "Viniendo" if es_cabecera else "Yéndose"
+
+                # Guardar para las tarjetas visibles de Cabecera
                 if item["mostrar"]:
                     arribos_limpios.append({
                         "tiempo": tiempo,
                         "ramal": ramal,
+                        "sentido": sentido,
                         "lat": lat,
                         "lon": lon
                     })
 
-                # Deduplicar coordenadas de colectivos para el mapa general
+                # Deduplicar coordenadas satelitales para el mapa
                 if lat and lon and str(lat).strip() and str(lon).strip():
                     try:
-                        # Clave de redondeo para no duplicar el mismo coche detectado desde dos paradas
                         coord_key = f"{round(float(lat), 3)}_{round(float(lon), 3)}"
+                        tiempo_cab = tiempo if es_cabecera else None
+
                         if coord_key not in buses_detectados:
                             buses_detectados[coord_key] = {
                                 "linea": item["linea"],
                                 "ramal": ramal,
-                                "tiempo": tiempo,
+                                "sentido": sentido,
+                                "tiempo_cabecera": tiempo_cab,
                                 "lat": float(lat),
                                 "lon": float(lon)
                             }
+                        else:
+                            # Si ya fue detectado por barrido, priorizamos los datos de Cabecera
+                            if es_cabecera:
+                                buses_detectados[coord_key]["tiempo_cabecera"] = tiempo_cab
+                                buses_detectados[coord_key]["sentido"] = sentido
+                                buses_detectados[coord_key]["ramal"] = ramal
                     except ValueError:
                         pass
 
