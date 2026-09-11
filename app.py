@@ -118,7 +118,7 @@ HTML_TEMPLATE = """
       box-shadow: 0 4px 14px rgba(0,0,0,0.4);
     }
     #map {
-      height: 300px;
+      height: 310px;
       width: 100%;
       background: #11111B;
     }
@@ -169,16 +169,16 @@ HTML_TEMPLATE = """
     .badge-status {
       font-size: 11px;
       font-weight: 700;
-      padding: 2px 7px;
+      padding: 2px 8px;
       border-radius: 6px;
       display: inline-block;
     }
-    .badge-viniendo {
+    .badge-plottier {
       background: rgba(166, 227, 161, 0.15);
       color: #A6E3A1;
       border: 1px solid rgba(166, 227, 161, 0.3);
     }
-    .badge-yendose {
+    .badge-neuquen {
       background: rgba(250, 179, 135, 0.15);
       color: #FAB387;
       border: 1px solid rgba(250, 179, 135, 0.3);
@@ -187,8 +187,7 @@ HTML_TEMPLATE = """
     .time-label { font-size: 12px; color: #A6ADC8; }
     .time-val { font-size: 15px; font-weight: 700; color: #A6E3A1; }
     
-    .card-actions { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
-    .btn-action { background: #313244; color: #CDD6F4; border: 1px solid #45475A; font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 8px; cursor: pointer; text-decoration: none; }
+    .btn-action { background: #313244; color: #CDD6F4; border: 1px solid #45475A; font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
     .empty { font-size: 13px; color: #A6ADC8; font-style: italic; padding: 4px 0; }
     
     .credits {
@@ -254,7 +253,7 @@ HTML_TEMPLATE = """
 <body>
   <header>
     <h1>Transporte Plottier</h1>
-    <p class="sub">GPS, recorridos y arribos en vivo</p>
+    <p class="sub">GPS y recorridos oficiales en vivo</p>
   </header>
 
   <div id="map-container">
@@ -281,7 +280,6 @@ HTML_TEMPLATE = """
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
-    // Coordenadas métricas oficiales extraídas de Smart Move Pro
     const TRAZAS_METRICAS = {
       "50B": {
         "IDA": [[-7576123.127717475,-4713953.225682237],[-7576127.135219142,-4713960.668571745],[-7576140.270919057,-4714625.541017488],[-7575523.672259552,-4714622.5350375585],[-7575533.913652705,-4715537.968661558],[-7578334.266763101,-4715525.657356469],[-7578412.190406656,-4715517.9270097455],[-7578498.129053549,-4715523.939501133],[-7578494.566829843,-4715600.956967883],[-7579108.493821568,-4715589.933986044],[-7579115.72958847,-4715842.177166955],[-7583422.0127703175,-4715796.366361502],[-7583523.090867958,-4715778.757888199],[-7583546.913238986,-4715779.473679201],[-7583639.5310553275,-4715757.141023744],[-7583717.454698882,-4715733.949472043],[-7583945.325696536,-4715679.120273622],[-7584124.772715694,-4715657.360465009],[-7584513.611697037,-4715650.345799814],[-7584585.078810125,-4715654.067866457],[-7584684.821073875,-4715642.042732994],[-7586734.21289938,-4715629.015521161],[-7586895.51484154,-4715621.7145636035],[-7587297.155564321,-4715619.280912253],[-7588442.187846622,-4715419.723488214],[-7588664.270230753,-4715194.25981618],[-7590284.970697214,-4713564.914808015],[-7590591.87853333,-4714429.581617774],[-7590632.510147468,-4714417.701074614],[-7590624.4951441325,-4713756.849877528],[-7594854.635794276,-4713713.624809864],[-7594851.518848535,-4712383.6136334315],[-7596173.103843232,-4712371.878595528],[-7596505.837801212,-4712371.306155002],[-7596507.062315612,-4712007.097415341],[-7596821.09459914,-4712010.675040777],[-7596824.768142336,-4711714.451925238],[-7597492.351128625,-4711704.291768824],[-7597495.690713347,-4711684.114586941],[-7597586.861376307,-4711683.685285635],[-7597684.154611261,-4711690.840309779],[-7597727.45789318,-4711685.545591426],[-7597782.672360612,-4711685.259390514],[-7597844.788636475,-4711680.966377784],[-7597998.52085326,-4711678.390571015],[-7598051.731569858,-4711679.249173199],[-7598168.394396211,-4711676.244065874],[-7598169.618910611,-4711685.545591426],[-7598514.820651559,-4711685.974892813],[-7598512.816900725,-4712308.0516757555],[-7598463.279727323,-4712301.611762196],[-7598446.470484212,-4712292.166563034],[-7598173.626412278,-4712256.103156181],[-7598125.425072765,-4712247.65975801],[-7598058.85601727,-4712240.361233048],[-7597865.271422781,-4712214.744883052],[-7597575.506788245,-4712170.810846718],[-7597547.676915548,-4712165.9451996675],[-7597528.752602113,-4712163.798591416],[-7597513.947109837,-4712164.943449095],[-7597508.492454789,-4712161.938197968],[-7597509.049052242,-4712127.8787473785],[-7597488.900224409,-4712119.864775614],[-7597477.5456363475,-4712111.850810179],[-7597471.200425373,-4712047.309997799],[-7596829.220921968,-4712055.46701795],[-7596829.220921968,-4712382.75497166],[-7596173.437801706,-4712373.16658683],[-7596170.654814434,-4713035.3588711675],[-7595380.954346748,-4713041.083652457],[-7595378.505317951,-4713714.054197047],[-7594863.763992522,-4713715.342358708],[-7594864.097950994,-4714610.94055188],[-7595153.1946685845,-4714615.807371415],[-7595602.257494444,-4714856.431565999],[-7595629.085491726,-4714867.740041546],[-7595630.866603578,-4714928.720139591],[-7595924.750059273,-4714929.292724408],[-7596190.469683797,-4714997.287401224],[-7596213.178859917,-4715768.307345327],[-7596826.437934698,-4715759.288392326],[-7596826.437934698,-4715656.644682625],[-7597004.326480986,-4715716.341107085],[-7597005.550995384,-4715740.248406765],[-7597262.2537411535,-4715780.332628469]],
@@ -317,57 +315,36 @@ HTML_TEMPLATE = """
       capaRuta = L.layerGroup().addTo(map);
     }
 
-    // Trazado direccional dinámico (fino por donde pasó, grueso y oscuro hacia donde va)
-    function mostrarRuta(linea, sentido, latBus, lonBus) {
+    // Dibuja el circuito completo sin cortes: trazo principal en el sentido del bus y secundario para el retorno
+    function mostrarRuta(linea, sentidoCode) {
       capaRuta.clearLayers();
-      const sentidoClave = (sentido === "Yéndose" || sentido === "IDA") ? "IDA" : "VUELTA";
+      const sentidoActivo = (sentidoCode === "IDA") ? "IDA" : "VUELTA";
+      const sentidoOpuesto = (sentidoActivo === "IDA") ? "VUELTA" : "IDA";
 
-      if (TRAZAS_METRICAS[linea] && TRAZAS_METRICAS[linea][sentidoClave]) {
-        const puntosMercator = TRAZAS_METRICAS[linea][sentidoClave];
-        const puntosLatLon = puntosMercator.map(p => mercatorALatLon(p[0], p[1]));
+      if (TRAZAS_METRICAS[linea]) {
+        const colorPrincipal = (linea === "50A") ? "#2ECC71" : "#3B82F6";
 
-        const colorAdelante = (linea === "50A") ? "#2ECC71" : "#3B82F6";
-
-        if (latBus && lonBus) {
-          let idxCercano = 0;
-          let distMin = Infinity;
-
-          puntosLatLon.forEach((p, idx) => {
-            const d = Math.hypot(p[0] - latBus, p[1] - lonBus);
-            if (d < distMin) {
-              distMin = d;
-              idxCercano = idx;
-            }
-          });
-
-          // Tramo previo (por donde ya pasó): Tenue y punteado
-          const tramoPrevio = puntosLatLon.slice(0, idxCercano + 1);
-          if (tramoPrevio.length > 1) {
-            capaRuta.addLayer(L.polyline(tramoPrevio, {
-              color: "#6C7086",
-              weight: 3,
-              opacity: 0.4,
-              dashArray: '5, 8'
-            }));
-          }
-
-          // Tramo hacia adelante: Grueso, nítido y de alto contraste
-          const tramoAdelante = puntosLatLon.slice(idxCercano);
-          if (tramoAdelante.length > 1) {
-            capaRuta.addLayer(L.polyline(tramoAdelante, {
-              color: colorAdelante,
-              weight: 6,
-              opacity: 0.95,
-              lineJoin: 'round'
-            }));
-          }
-        } else {
-          // Si no hay colectivo seleccionado, dibuja la traza completa
-          capaRuta.addLayer(L.polyline(puntosLatLon, {
-            color: colorAdelante,
-            weight: 4,
-            opacity: 0.85
+        // 1. Trazar el recorrido de retorno de fondo (punteado sutil)
+        if (TRAZAS_METRICAS[linea][sentidoOpuesto]) {
+          const puntosOpuestos = TRAZAS_METRICAS[linea][sentidoOpuesto].map(p => mercatorALatLon(p[0], p[1]));
+          capaRuta.addLayer(L.polyline(puntosOpuestos, {
+            color: "#6C7086",
+            weight: 3,
+            opacity: 0.5,
+            dashArray: '5, 8'
           }));
+        }
+
+        // 2. Trazar el recorrido activo oficial (línea continua nítida sin truncar)
+        if (TRAZAS_METRICAS[linea][sentidoActivo]) {
+          const puntosActivos = TRAZAS_METRICAS[linea][sentidoActivo].map(p => mercatorALatLon(p[0], p[1]));
+          const lineaActiva = L.polyline(puntosActivos, {
+            color: colorPrincipal,
+            weight: 5,
+            opacity: 0.95,
+            lineJoin: 'round'
+          });
+          capaRuta.addLayer(lineaActiva);
         }
 
         document.getElementById('btn-clear').style.display = 'block';
@@ -379,10 +356,10 @@ HTML_TEMPLATE = """
       document.getElementById('btn-clear').style.display = 'none';
     }
 
-    function centrarEn(lat, lon, linea, sentido) {
+    function centrarEn(lat, lon, linea, sentidoCode) {
       map.setView([lat, lon], 15, { animate: true });
-      if (linea && sentido) {
-        mostrarRuta(linea, sentido, lat, lon);
+      if (linea && sentidoCode) {
+        mostrarRuta(linea, sentidoCode);
       }
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -449,21 +426,18 @@ HTML_TEMPLATE = """
           iconAnchor: [29, 12]
         });
 
-        const estadoColor = esPerdido ? '#e74c3c' : (b.sentido === 'Viniendo' ? '#2ecc71' : '#e67e22');
-        const estadoTexto = esPerdido ? '⚠️ Señal perdida (última pos.)' : (b.sentido === 'Viniendo' ? '🟢 Viniendo hacia Cabecera' : '🟠 Yéndose de Cabecera');
+        const estadoColor = esPerdido ? '#e74c3c' : (b.sentido_code === 'IDA' ? '#2ecc71' : '#e67e22');
+        const estadoTexto = esPerdido ? '⚠️ Señal perdida (última pos.)' : (b.sentido_code === 'IDA' ? '🟢 Hacia Plottier' : '🟠 Hacia Neuquén');
         const tiempoTexto = b.tiempo_cabecera 
-          ? `<div style="color: #27ae60; font-weight: bold; margin-top: 4px;">⏱️ Arribo a Cabecera: ${b.tiempo_cabecera}</div>` 
-          : `<div style="color: #7f8c8d; font-style: italic; margin-top: 4px;">📍 En trayecto intermedio</div>`;
+          ? `<div style="color: #27ae60; font-weight: bold; margin-top: 5px;">⏱️ Arribo: ${b.tiempo_cabecera}</div>` 
+          : `<div style="color: #7f8c8d; font-style: italic; margin-top: 5px;">📍 En trayecto intermedio</div>`;
 
         const contenidoPopup = `
-          <div style="font-family: sans-serif; font-size: 13px; line-height: 1.4; min-width: 175px;">
+          <div style="font-family: sans-serif; font-size: 13px; line-height: 1.4; min-width: 170px;">
             <strong style="color: #111; font-size: 14px;">Línea ${b.linea}</strong><br>
             <span style="color: ${estadoColor}; font-weight: 700;">${estadoTexto}</span><br>
             <span style="color: #555; font-size: 12px;">Ramal: ${b.ramal}</span>
             ${tiempoTexto}
-            <div style="margin-top: 8px;">
-              <button style="background: #313244; color: #CDD6F4; border: 1px solid #45475A; padding: 4px 8px; border-radius: 6px; font-size: 11px; cursor: pointer; width: 100%;" onclick="mostrarRuta('${b.linea}', '${b.sentido}', ${b.lat}, ${b.lon})">🗺️ Ver recorrido</button>
-            </div>
           </div>
         `;
 
@@ -476,7 +450,7 @@ HTML_TEMPLATE = """
           marker.bindPopup(contenidoPopup);
           
           marker.on('click', () => {
-            mostrarRuta(b.linea, b.sentido, b.lat, b.lon);
+            mostrarRuta(b.linea, b.sentido_code);
           });
 
           marker.addTo(map);
@@ -515,11 +489,11 @@ HTML_TEMPLATE = """
         } else {
           item.arribos.forEach(c => {
             const botonVer = (c.lat && c.lon) 
-              ? `<button class="btn-action" onclick="centrarEn(${c.lat}, ${c.lon}, '${item.linea}', '${c.sentido}')">Ver en Mapa</button>` 
+              ? `<button class="btn-action" onclick="centrarEn(${c.lat}, ${c.lon}, '${item.linea}', '${c.sentido_code}')">Ver en Mapa</button>` 
               : '';
 
-            const badgeClass = c.sentido === 'Viniendo' ? 'badge-viniendo' : 'badge-yendose';
-            const badgeIcon = c.sentido === 'Viniendo' ? '🟢' : '🟠';
+            const badgeClass = c.sentido_code === 'IDA' ? 'badge-plottier' : 'badge-neuquen';
+            const badgeIcon = c.sentido_code === 'IDA' ? '🟢' : '🟠';
 
             html += `<div class="arrival-row">
               <div>
@@ -529,7 +503,7 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="time-label">A Cabecera: <span class="time-val">${c.tiempo}</span></div>
               </div>
-              <div class="card-actions">
+              <div>
                 ${botonVer}
               </div>
             </div>`;
@@ -603,13 +577,22 @@ def api_arribos():
                 ramal = c.get("descripcionBandera", item["linea"])
 
                 ramal_upper = str(ramal).upper()
-                sentido = "Yéndose" if "IDA" in ramal_upper else "Viniendo"
+                if "IDA" in ramal_upper:
+                    sentido = "Hacia Plottier"
+                    sentido_code = "IDA"
+                elif "VUELTA" in ramal_upper:
+                    sentido = "Hacia Neuquén"
+                    sentido_code = "VUELTA"
+                else:
+                    sentido = "Hacia Plottier" if es_cabecera else "Hacia Neuquén"
+                    sentido_code = "IDA" if es_cabecera else "VUELTA"
 
                 if item["mostrar"]:
                     arribos_limpios.append({
                         "tiempo": tiempo,
                         "ramal": ramal,
                         "sentido": sentido,
+                        "sentido_code": sentido_code,
                         "lat": lat,
                         "lon": lon
                     })
@@ -618,7 +601,7 @@ def api_arribos():
                     try:
                         f_lat = float(lat)
                         f_lon = float(lon)
-                        vincular_o_crear_colectivo(item["linea"], ramal, sentido, tiempo, es_cabecera, f_lat, f_lon, ahora)
+                        vincular_o_crear_colectivo(item["linea"], ramal, sentido, sentido_code, tiempo, es_cabecera, f_lat, f_lon, ahora)
                     except ValueError:
                         pass
 
@@ -644,7 +627,7 @@ def api_arribos():
         "from_cache": False
     })
 
-def vincular_o_crear_colectivo(linea, ramal, sentido, tiempo, es_cabecera, lat, lon, ahora):
+def vincular_o_crear_colectivo(linea, ramal, sentido, sentido_code, tiempo, es_cabecera, lat, lon, ahora):
     bus_existente_id = None
     for bus_id, datos in flota_memoria.items():
         if datos["linea"] == linea:
@@ -659,6 +642,7 @@ def vincular_o_crear_colectivo(linea, ramal, sentido, tiempo, es_cabecera, lat, 
         flota_memoria[bus_existente_id]["last_seen"] = ahora
         flota_memoria[bus_existente_id]["ramal"] = ramal
         flota_memoria[bus_existente_id]["sentido"] = sentido
+        flota_memoria[bus_existente_id]["sentido_code"] = sentido_code
         if es_cabecera:
             flota_memoria[bus_existente_id]["tiempo_cabecera"] = tiempo
     else:
@@ -668,6 +652,7 @@ def vincular_o_crear_colectivo(linea, ramal, sentido, tiempo, es_cabecera, lat, 
             "linea": linea,
             "ramal": ramal,
             "sentido": sentido,
+            "sentido_code": sentido_code,
             "tiempo_cabecera": tiempo if es_cabecera else None,
             "lat": lat,
             "lon": lon,
@@ -684,6 +669,7 @@ def serializar_flota(ahora):
             "linea": datos["linea"],
             "ramal": datos["ramal"],
             "sentido": datos["sentido"],
+            "sentido_code": datos["sentido_code"],
             "tiempo_cabecera": datos["tiempo_cabecera"],
             "lat": datos["lat"],
             "lon": datos["lon"],
