@@ -14,11 +14,26 @@ app = Flask(__name__)
 URL_PAGINA = "https://cuandollega.smartmovepro.net/indalo/recorridos"
 URL_API = f"{URL_PAGINA}?handler=Arribos"
 
-CONSULTAS = [
-    {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "cod": "1014", "mostrar": True},
-    {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "cod": "1013", "mostrar": True},
-    {"seccion": "BARRIDO",  "parada": "NV1058", "linea": "50B", "cod": "1014", "mostrar": False},
+# Tandas rotativas para cubrir paradas aledañas sin saturar el servidor (50A: 1013, 50B: 1014, 50R: 1015)
+GRUPOS_CONSULTAS = [
+    # Tanda A: Cabeceras oficiales + Barrido principal
+    [
+        {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "cod": "1014", "mostrar": True},
+        {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "cod": "1013", "mostrar": True},
+        {"seccion": "BARRIDO",  "parada": "NV1058", "linea": "50B", "cod": "1014", "mostrar": False},
+        {"seccion": "BARRIDO",  "parada": "NV1032", "linea": "50A", "cod": "1013", "mostrar": False},
+    ],
+    # Tanda B: Paradas aledañas estratégicas + Línea 50R
+    [
+        {"seccion": "BARRIDO",  "parada": "NV1032", "linea": "50B", "cod": "1014", "mostrar": False},
+        {"seccion": "BARRIDO",  "parada": "NV1244", "linea": "50A", "cod": "1013", "mostrar": False},
+        {"seccion": "BARRIDO",  "parada": "NV1244", "linea": "50B", "cod": "1014", "mostrar": False},
+        {"seccion": "BARRIDO",  "parada": "NV1032", "linea": "50R", "cod": "1015", "mostrar": False},
+        {"seccion": "BARRIDO",  "parada": "NV1244", "linea": "50R", "cod": "1015", "mostrar": False},
+    ]
 ]
+
+indice_grupo_actual = 0
 
 session = requests.Session()
 session.headers.update({
@@ -27,12 +42,15 @@ session.headers.update({
 })
 csrf_token = None
 
-CACHE_TTL = 24
+CACHE_TTL = 20
 TIEMPO_PERDIDO = 75
 TIEMPO_EXPIRAR = 200
 
 flota_memoria = {}
-ultimo_cache_cabeceras = []
+cabeceras_memoria = {
+    ("NV2000", "50B"): {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "arribos": []},
+    ("NV1014", "50A"): {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "arribos": []},
+}
 ultima_hora_sync = "--:--:--"
 ultimo_escaneo_ts = 0
 
@@ -76,7 +94,7 @@ def consultar_arribos(parada, cod_linea):
 
     resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=9)
     if resp.status_code in (400, 401, 403, 500):
-        time.sleep(0.5)
+        time.sleep(0.4)
         renovar_token()
         headers["RequestVerificationToken"] = csrf_token
         resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=9)
@@ -88,18 +106,19 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-CE85R9NET5"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-CE85R9NET5"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
 
-  gtag('config', 'G-CE85R9NET5');
-</script>
+    gtag('config', 'G-CE85R9NET5');
+  </script>
+
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Líneas 50A / 50B - Plottier</title>
+  <title>Líneas 50A / 50B / 50R - Plottier</title>
   
   <meta name="theme-color" content="#181825">
   <meta name="mobile-web-app-capable" content="yes">
@@ -167,6 +186,7 @@ HTML_TEMPLATE = """
     .line-tag { background: #313244; font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
     .line-50b { color: #89B4FA; }
     .line-50a { color: #A6E3A1; }
+    .line-50r { color: #FAB387; }
     .stop-tag { font-size: 12px; color: #6C7086; }
     
     .arrival-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-top: 1px solid #2A2B3D; }
@@ -245,6 +265,7 @@ HTML_TEMPLATE = """
     }
     .bus-marker-50b { background-color: #1E2D42; border: 2px solid #89B4FA; color: #89B4FA; }
     .bus-marker-50a { background-color: #1E3A24; border: 2px solid #A6E3A1; color: #A6E3A1; }
+    .bus-marker-50r { background-color: #382418; border: 2px solid #FAB387; color: #FAB387; }
     
     .bus-marker-lost {
       background-color: #381A22 !important;
@@ -262,7 +283,7 @@ HTML_TEMPLATE = """
 <body>
   <header>
     <h1>Transporte Plottier</h1>
-    <p class="sub">GPS y recorridos oficiales en vivo</p>
+    <p class="sub">GPS y recorridos oficiales (50A, 50B y 50R)</p>
   </header>
 
   <div id="map-container">
@@ -333,7 +354,6 @@ HTML_TEMPLATE = """
       capaRuta = L.layerGroup().addTo(map);
     }
 
-    // Traza el circuito completo sin cortes; detecta inteligentemente por GPS qué tramo transita el bus
     function mostrarRuta(linea, latBus, lonBus) {
       capaRuta.clearLayers();
       if (!TRAZAS_METRICAS[linea]) return;
@@ -351,7 +371,6 @@ HTML_TEMPLATE = """
       const colorBase = (linea === "50A") ? "#2ECC71" : "#3B82F6";
       const colorSecundario = (linea === "50A") ? "#16A085" : "#1D4ED8";
 
-      // 1. Tramo Ida (Neuquén -> Plottier)
       capaRuta.addLayer(L.polyline(puntosIda, {
         color: destacaIda ? colorBase : colorSecundario,
         weight: destacaIda ? 6 : 3.5,
@@ -359,7 +378,6 @@ HTML_TEMPLATE = """
         lineJoin: 'round'
       }));
 
-      // 2. Tramo Vuelta (Plottier -> Neuquén)
       capaRuta.addLayer(L.polyline(puntosVuelta, {
         color: !destacaIda ? colorBase : colorSecundario,
         weight: !destacaIda ? 6 : 3.5,
@@ -432,7 +450,11 @@ HTML_TEMPLATE = """
       buses.forEach(b => {
         idsRecibidos.add(b.id);
         const esPerdido = (b.estado === 'perdido');
-        let claseCss = (b.linea === "50A") ? "bus-marker-50a" : "bus-marker-50b";
+        
+        let claseCss = "bus-marker-50b";
+        if (b.linea === "50A") claseCss = "bus-marker-50a";
+        else if (b.linea === "50R") claseCss = "bus-marker-50r";
+        
         if (esPerdido) claseCss = "bus-marker-lost";
 
         const iconoHtml = `<div class="bus-marker ${claseCss}">${esPerdido ? '⚠️' : '🚌'} ${b.linea}</div>`;
@@ -443,7 +465,6 @@ HTML_TEMPLATE = """
           iconAnchor: [29, 12]
         });
 
-        // Verificación de sentido por posición satelital real
         let sentidoTexto = (b.sentido_code === 'IDA') ? '🟢 Hacia Plottier' : '🟠 Hacia Neuquén';
         if (TRAZAS_METRICAS[b.linea]) {
           const pIda = TRAZAS_METRICAS[b.linea]["IDA"].map(p => mercatorALatLon(p[0], p[1]));
@@ -502,7 +523,9 @@ HTML_TEMPLATE = """
           html += `<div class="section-title">📍 ${secActual}</div>`;
         }
 
-        const tagClase = item.linea === "50A" ? "line-50a" : "line-50b";
+        let tagClase = "line-50b";
+        if (item.linea === "50A") tagClase = "line-50a";
+        else if (item.linea === "50R") tagClase = "line-50r";
 
         html += `<div class="card">
           <div class="card-header">
@@ -576,21 +599,23 @@ def manifest():
 
 @app.route('/api/arribos')
 def api_arribos():
-    global flota_memoria, ultimo_cache_cabeceras, ultima_hora_sync, ultimo_escaneo_ts
+    global flota_memoria, cabeceras_memoria, ultima_hora_sync, ultimo_escaneo_ts, indice_grupo_actual
     ahora = time.time()
 
-    if (ahora - ultimo_escaneo_ts) < CACHE_TTL and ultimo_cache_cabeceras:
+    if (ahora - ultimo_escaneo_ts) < CACHE_TTL and cabeceras_memoria:
         return jsonify({
             "hora": ultima_hora_sync,
-            "items": ultimo_cache_cabeceras,
+            "items": list(cabeceras_memoria.values()),
             "buses": serializar_flota(ahora),
             "from_cache": True
         })
 
-    nuevas_cabeceras = []
+    consultas_a_ejecutar = GRUPOS_CONSULTAS[indice_grupo_actual]
+    indice_grupo_actual = (indice_grupo_actual + 1) % len(GRUPOS_CONSULTAS)
+
     consultas_ok = 0
 
-    for item in CONSULTAS:
+    for item in consultas_a_ejecutar:
         try:
             arribos_raw = consultar_arribos(item["parada"], item["cod"])
             arribos_limpios = []
@@ -632,23 +657,28 @@ def api_arribos():
                         pass
 
             if item["mostrar"]:
-                nuevas_cabeceras.append({**item, "arribos": arribos_limpios})
+                clave_cab = (item["parada"], item["linea"])
+                cabeceras_memoria[clave_cab] = {
+                    "seccion": "CABECERA",
+                    "parada": item["parada"],
+                    "linea": item["linea"],
+                    "arribos": arribos_limpios
+                }
 
             consultas_ok += 1
-            time.sleep(0.5)
+            time.sleep(0.4)
         except Exception:
             pass
 
     flota_memoria = {k: v for k, v in flota_memoria.items() if (ahora - v["last_seen"]) < TIEMPO_EXPIRAR}
 
-    if consultas_ok > 0 or not ultimo_cache_cabeceras:
-        ultimo_cache_cabeceras = nuevas_cabeceras
+    if consultas_ok > 0 or not cabeceras_memoria:
         ultima_hora_sync = obtener_hora_arg()
         ultimo_escaneo_ts = ahora
 
     return jsonify({
         "hora": ultima_hora_sync,
-        "items": ultimo_cache_cabeceras,
+        "items": list(cabeceras_memoria.values()),
         "buses": serializar_flota(ahora),
         "from_cache": False
     })
