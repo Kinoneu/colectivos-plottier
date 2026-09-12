@@ -1,34 +1,3 @@
-**Es totalmente viable y necesario achicar ese límite de 300 metros.** Ese umbral era el causante directo de que los coches en caravana desaparecieran y de que se generaran los fantasmas con «señal débil» que ves en el mapa.
-
----
-
-**Por qué fallaba el límite de 300 metros**
-
-* **Colectivos en caravana:** Cuando dos unidades viajaban a 100 o 150 metros una de otra (algo habitual en horas pico), el filtro de 300 metros asumía que eran el mismo coche y eliminaba una de las dos.
-* **Coches que se cruzaban:** Si un coche iba a Neuquén y otro a Plottier, al cruzarse en la misma ruta quedaban a menos de 300 metros y el algoritmo sobreescribía uno con el otro.
-* **Generación de unidades «fantasma»:** A 50 km/h por la Ruta 22, un colectivo recorre más de 400 metros en 30 segundos. Como avanzaba más allá de los 300 metros de tolerancia, el sistema no lo reconocía como el mismo, creaba un marcador nuevo adelante y dejaba la posición vieja clavada atrás marcada como «⚠️ 3 señal débil».
-* **La solución implementada:**
-1. La deduplicación entre paradas en el mismo segundo ahora se ajusta a **45 metros**. Si dos coches vienen a 80 o 100 metros, **se muestran ambos**.
-2. Es obligatorio que coincidan la **línea y el sentido** (`HACIA_NEUQUEN` vs `HACIA_PLOTTIER`). Dos colectivos que se cruzan en direcciones opuestas ya no colisionan en la memoria.
-3. Para el seguimiento de un mismo coche entre ciclos de 30 segundos, la ventana se amplió a **900 metros en su dirección de viaje**, evitando que deje fantasmas rojos al acelerar.
-
-
-
----
-
-**Por qué decía «Hacia Plottier» cuando iba a Neuquén**
-
-* **El origen del error:** La tarjeta inferior decía la verdad (`50B IDA -> Hacia Neuquén`), pero en el mapa había una función JavaScript auxiliar que intentaba calcular distancias a las líneas para adivinar el sentido. Como la multitrocha es compartida por la ida y la vuelta, por una diferencia de milímetros la función geométrica falló y sobreescribió el dato real, mostrando `🟢 Hacia Plottier`.
-* **La coherencia de los 40 minutos:** Tenías toda la razón con el tiempo. Desde Valentina / Aeropuerto hasta la cabecera este de Neuquén Centro, el colectivo tarda exactamente entre 35 y 45 minutos con tráfico y paradas urbanas. Si estuviera yendo a Plottier, para volver a Neuquén tardaría casi dos horas completando todo el recorrido barrial.
-* **La corrección:** Se eliminó la adivinación geométrica del mapa. Ahora el marcador, el popup y la tarjeta leen **el dato oficial del ramal**, coincidiendo todos en **`🟠 Hacia Neuquén`** y dibujando la traza correcta.
-
----
-
-### Código completo actualizado para `app.py`
-
-Copiá este bloque completo, pegalo en GitHub reemplazando el archivo anterior y guardá con **«Commit changes...»**:
-
-```python
 import os
 import re
 import time
@@ -61,9 +30,9 @@ session.headers.update({
 })
 csrf_token = None
 
-CACHE_TTL = 18
-TIEMPO_PERDIDO = 80
-TIEMPO_EXPIRAR = 200
+CACHE_TTL = 15
+TIEMPO_DEAD_RECKONING = 60
+TIEMPO_EXPIRAR = 360
 
 flota_memoria = {}
 cabeceras_memoria = {
@@ -73,12 +42,15 @@ cabeceras_memoria = {
 ultima_hora_sync = "--:--:--"
 ultimo_escaneo_ts = 0
 
+
 def obtener_hora_arg():
     tz_arg = timezone(timedelta(hours=-3))
     return datetime.now(tz_arg).strftime("%H:%M:%S")
 
+
 def calcular_distancia(lat1, lon1, lat2, lon2):
-    return math.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2) * 111.0
+    return math.sqrt((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2) * 111.0
+
 
 def renovar_token():
     global csrf_token, session
@@ -96,11 +68,12 @@ def renovar_token():
     if not csrf_token:
         raise Exception("No se pudo obtener token CSRF.")
 
+
 def consultar_arribos(parada, cod_linea):
     global csrf_token
     if not csrf_token:
         renovar_token()
-    
+
     headers = {
         "Accept": "*/*",
         "Content-Type": "application/json",
@@ -121,209 +94,232 @@ def consultar_arribos(parada, cod_linea):
     resp.raise_for_status()
     return resp.json().get("arribos", [])
 
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-CE85R9NET5"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
     function gtag(){dataLayer.push(arguments);}
     gtag('js', new Date());
-
     gtag('config', 'G-CE85R9NET5');
   </script>
 
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Líneas 50A / 50B / 50R - Plottier</title>
+  <title>Líneas 50A / 50B / 50R - Monitoreo Profesional</title>
   
-  <meta name="theme-color" content="#181825">
+  <meta name="theme-color" content="#0F111A">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="manifest" href="/manifest.json">
-  <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1048/1048314.png">
-  <link rel="icon" type="image/png" href="https://cdn-icons-png.flaticon.com/512/1048/1048314.png">
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: #181825; color: #CDD6F4; padding: 16px 14px 95px; }
-    header { margin-bottom: 12px; }
-    h1 { font-size: 22px; color: #89B4FA; font-weight: 800; }
-    .sub { font-size: 13px; color: #A6ADC8; margin-top: 2px; }
+    body { background-color: #0F111A; color: #CDD6F4; padding: 14px 12px 90px; }
     
+    header { margin-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-end; }
+    h1 { font-size: 20px; color: #89B4FA; font-weight: 800; letter-spacing: -0.3px; }
+    .sub { font-size: 12px; color: #A6ADC8; }
+
     #map-container {
       position: relative;
       margin-bottom: 16px;
-      border-radius: 14px;
+      border-radius: 16px;
       overflow: hidden;
-      border: 1px solid #313244;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+      border: 1px solid #23273A;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
     }
     #map {
-      height: 310px;
+      height: 360px;
       width: 100%;
-      background: #11111B;
+      background: #0B0D13;
     }
-    .map-badge {
+
+    .hud-badge {
       position: absolute;
-      top: 10px;
-      left: 10px;
+      top: 12px;
+      left: 12px;
       z-index: 1000;
-      background: rgba(24, 24, 37, 0.9);
-      backdrop-filter: blur(6px);
-      padding: 5px 12px;
-      border-radius: 8px;
+      background: rgba(15, 17, 26, 0.88);
+      backdrop-filter: blur(8px);
+      padding: 6px 12px;
+      border-radius: 20px;
       font-size: 11px;
       color: #CDD6F4;
       border: 1px solid #313244;
       font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .hud-dot { width: 7px; height: 7px; border-radius: 50%; background: #A6E3A1; box-shadow: 0 0 6px #A6E3A1; }
+
+    .map-btn-group {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .map-ctrl-btn {
+      background: rgba(15, 17, 26, 0.9);
+      backdrop-filter: blur(8px);
+      border: 1px solid #313244;
+      color: #CDD6F4;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+      font-size: 15px;
     }
     .btn-clear-route {
       position: absolute;
-      bottom: 10px;
-      right: 10px;
+      bottom: 12px;
+      left: 12px;
       z-index: 1000;
-      background: rgba(24, 24, 37, 0.9);
-      border: 1px solid #45475A;
-      color: #CDD6F4;
+      background: rgba(243, 139, 168, 0.15);
+      border: 1px solid #F38BA8;
+      color: #F38BA8;
       font-size: 11px;
       font-weight: 700;
       padding: 6px 12px;
-      border-radius: 8px;
+      border-radius: 20px;
       cursor: pointer;
       display: none;
     }
 
-    .section-title { font-size: 14px; color: #F5E0DC; text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 8px; font-weight: 700; }
-    .card { background: #1E1E2E; border: 1px solid #313244; border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
-    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-    .line-tag { background: #313244; font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
-    .line-50b { color: #89B4FA; }
-    .line-50a { color: #A6E3A1; }
-    .line-50r { color: #FAB387; }
-    .stop-tag { font-size: 12px; color: #6C7086; }
-    
-    .arrival-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-top: 1px solid #2A2B3D; }
-    .arrival-row:first-of-type { border-top: none; }
-    
-    .branch-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-    .branch { font-size: 13px; color: #CDD6F4; font-weight: 600; }
-    
-    .badge-status {
-      font-size: 11px;
-      font-weight: 700;
-      padding: 2px 8px;
-      border-radius: 6px;
-      display: inline-block;
+    /* Marcador Uber de Usuario */
+    .user-beacon {
+      position: relative;
+      width: 22px;
+      height: 22px;
     }
-    .badge-neuquen {
-      background: rgba(250, 179, 135, 0.15);
-      color: #FAB387;
-      border: 1px solid rgba(250, 179, 135, 0.3);
+    .user-beacon-core {
+      position: absolute;
+      top: 5px;
+      left: 5px;
+      width: 12px;
+      height: 12px;
+      background: #3B82F6;
+      border: 2px solid #FFFFFF;
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(59, 130, 246, 0.8);
+      z-index: 2;
     }
-    .badge-plottier {
-      background: rgba(166, 227, 161, 0.15);
-      color: #A6E3A1;
-      border: 1px solid rgba(166, 227, 161, 0.3);
+    .user-beacon-pulse {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      background: rgba(59, 130, 246, 0.35);
+      border-radius: 50%;
+      animation: uber-pulse 2s infinite ease-out;
+      z-index: 1;
     }
-
-    .time-label { font-size: 12px; color: #A6ADC8; }
-    .time-val { font-size: 15px; font-weight: 700; color: #A6E3A1; }
-    .no-gps-hint { font-size: 11px; color: #6C7086; font-style: italic; margin-top: 2px; }
-    
-    .btn-action { background: #313244; color: #CDD6F4; border: 1px solid #45475A; font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
-    .empty { font-size: 13px; color: #A6ADC8; font-style: italic; padding: 4px 0; }
-    
-    .credits {
-      text-align: center;
-      margin-top: 24px;
-      padding-top: 16px;
-      border-top: 1px solid #313244;
-      font-size: 12px;
-      color: #6C7086;
-      letter-spacing: 0.3px;
-    }
-    .credits .author { color: #CDD6F4; font-weight: 600; }
-    .credits .alias-badge {
-      background: #313244;
-      color: #89B4FA;
-      font-size: 10px;
-      font-weight: 700;
-      padding: 2px 7px;
-      border-radius: 6px;
-      margin-left: 4px;
-      display: inline-block;
+    @keyframes uber-pulse {
+      0% { transform: scale(0.6); opacity: 1; }
+      100% { transform: scale(2.2); opacity: 0; }
     }
 
-    .bar-fixed { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(24, 24, 37, 0.96); backdrop-filter: blur(10px); padding: 12px 16px; border-top: 1px solid #313244; display: flex; justify-content: space-between; align-items: center; z-index: 2000; }
-    .btn-refresh { background: #89B4FA; color: #11111B; border: none; font-size: 15px; font-weight: 700; padding: 12px 20px; border-radius: 12px; cursor: pointer; min-width: 125px; }
-    .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
-    .status-box { text-align: right; }
-    .status-text { font-size: 12px; color: #A6ADC8; font-weight: 500; }
-    .cached-hint { font-size: 10px; color: #A6E3A1; }
-
-    .leaflet-marker-icon {
-      transition: transform 1.2s ease-in-out;
-      cursor: pointer;
+    /* Vehículo Estilo Uber / Píldora de Navegación */
+    .uber-puck {
+      position: relative;
+      width: 72px;
+      height: 28px;
+      pointer-events: auto;
     }
-
-    .bus-marker {
+    .puck-body {
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 4px;
-      padding: 3px 7px;
-      border-radius: 8px;
+      padding: 2px 7px;
+      border-radius: 20px;
+      background: #181825;
+      border: 1.5px solid #89B4FA;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+      color: #FFF;
       font-size: 11px;
       font-weight: 800;
-      white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+      height: 100%;
     }
-    .bus-marker-50b { background-color: #1E2D42; border: 2px solid #89B4FA; color: #89B4FA; }
-    .bus-marker-50a { background-color: #1E3A24; border: 2px solid #A6E3A1; color: #A6E3A1; }
-    .bus-marker-50r { background-color: #382418; border: 2px solid #FAB387; color: #FAB387; }
+    .puck-arrow {
+      font-size: 10px;
+      display: inline-block;
+      transition: transform 0.5s ease;
+      color: #89B4FA;
+    }
+    .puck-50a { border-color: #A6E3A1; color: #A6E3A1; }
+    .puck-50a .puck-arrow { color: #A6E3A1; }
+    .puck-50b { border-color: #89B4FA; color: #89B4FA; }
+    .puck-50b .puck-arrow { color: #89B4FA; }
+    .puck-50r { border-color: #FAB387; color: #FAB387; }
+    .puck-50r .puck-arrow { color: #FAB387; }
+
+    .puck-dr {
+      border-style: dashed !important;
+      border-color: #F9E2AF !important;
+      background: #201C16 !important;
+      color: #F9E2AF !important;
+    }
+    .puck-dr .puck-arrow { color: #F9E2AF !important; }
+
+    .section-title { font-size: 13px; color: #A6ADC8; text-transform: uppercase; letter-spacing: 0.8px; margin: 16px 0 8px; font-weight: 700; }
+    .card { background: #181825; border: 1px solid #23273A; border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .line-tag { font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 6px; background: #23273A; }
+    .stop-tag { font-size: 11px; color: #6C7086; }
     
-    .bus-marker-lost {
-      background-color: #381A22 !important;
-      border: 2px solid #F38BA8 !important;
-      color: #F38BA8 !important;
-      animation: pulse-lost 1.5s infinite;
-    }
-    @keyframes pulse-lost {
-      0% { opacity: 1; }
-      50% { opacity: 0.55; }
-      100% { opacity: 1; }
-    }
+    .arrival-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-top: 1px solid #1E1E2E; }
+    .arrival-row:first-of-type { border-top: none; }
+    .time-val { font-size: 14px; font-weight: 800; color: #A6E3A1; }
+    .dist-user { font-size: 11px; color: #89B4FA; font-weight: 600; margin-top: 2px; }
+
+    .btn-action { background: #23273A; color: #CDD6F4; border: 1px solid #313244; font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 8px; cursor: pointer; }
+
+    .bar-fixed { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(15, 17, 26, 0.95); backdrop-filter: blur(12px); padding: 10px 14px; border-top: 1px solid #23273A; display: flex; justify-content: space-between; align-items: center; z-index: 2000; }
+    .btn-refresh { background: #3B82F6; color: #FFF; border: none; font-size: 14px; font-weight: 700; padding: 10px 18px; border-radius: 10px; cursor: pointer; }
+    .btn-refresh:disabled { opacity: 0.5; }
+    .status-text { font-size: 11px; color: #A6ADC8; text-align: right; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Transporte Plottier</h1>
-    <p class="sub">GPS y recorridos oficiales (50A, 50B y 50R)</p>
+    <div>
+      <h1>Red Metropolitana</h1>
+      <p class="sub">Telemetría y navegación vehicular continua</p>
+    </div>
   </header>
 
   <div id="map-container">
-    <div class="map-badge" id="bus-count">Sincronizando flota...</div>
-    <button class="btn-clear-route" id="btn-clear" onclick="limpiarRuta()">✕ Quitar recorrido</button>
+    <div class="hud-badge">
+      <span class="hud-dot"></span>
+      <span id="bus-count">Conectando telemetría...</span>
+    </div>
+    <div class="map-btn-group">
+      <button class="map-ctrl-btn" onclick="centrarEnUsuario()" title="Mi ubicación">📍</button>
+    </div>
+    <button class="btn-clear-route" id="btn-clear" onclick="limpiarRuta()">✕ Quitar ruta</button>
     <div id="map"></div>
   </div>
 
-  <div id="contenido">Cargando cabeceras...</div>
-
-  <div class="credits">
-    Desarrollado por <span class="author">Ramiro Alzogaray</span>
-    <span class="alias-badge">KaiLoos</span>
-  </div>
+  <div id="contenido">Obteniendo arribos de red...</div>
 
   <div class="bar-fixed">
     <button id="btn" class="btn-refresh" onclick="pedirDatos()">Actualizar</button>
-    <div class="status-box">
-      <div id="status" class="status-text">Iniciando...</div>
-      <div id="hint" class="cached-hint">Auto-refresco: Activo (30s)</div>
+    <div class="status-text">
+      <div id="status">Sincronizando...</div>
+      <div style="font-size: 10px; color: #A6E3A1;">Filtro Dead-Reckoning Activo</div>
     </div>
   </div>
 
@@ -359,18 +355,110 @@ HTML_TEMPLATE = """
     let map;
     let capaRuta = null;
     let marcadores = {};
-    let cooldownTimer = null;
+    let estadoVehiculos = {};
+    let usuarioMarker = null;
+    let usuarioPos = null;
+
+    function distanciaMetros(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function calcularRumbo(lat1, lon1, lat2, lon2) {
+      const y = Math.sin((lon2 - lon1) * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180);
+      const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) -
+                Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos((lon2 - lon1) * Math.PI / 180);
+      let brng = Math.atan2(y, x) * 180 / Math.PI;
+      return (brng + 360) % 360;
+    }
+
+    // Map Matching: Proyección ortogonal a la calzada más cercana
+    function snapATraza(lat, lon, linea, sentidoCode) {
+      const traza = RUTAS_GEO[linea] && RUTAS_GEO[linea][sentidoCode];
+      if (!traza || traza.length < 2) return { lat, lon, bearing: 0 };
+
+      let minD = Infinity;
+      let snapP = [lat, lon];
+      let bearing = 0;
+
+      for (let i = 0; i < traza.length - 1; i++) {
+        const p1 = traza[i];
+        const p2 = traza[i+1];
+        const d = distanciaMetros(lat, lon, p1[0], p1[1]);
+        if (d < minD && d < 180) { // Tolerancia máxima 180m de desvío
+          minD = d;
+          snapP = p1;
+          bearing = calcularRumbo(p1[0], p1[1], p2[0], p2[1]);
+        }
+      }
+      return { lat: snapP[0], lon: snapP[1], bearing };
+    }
 
     function initMap() {
-      map = L.map('map', { zoomControl: false }).setView([-38.955, -68.16], 12);
+      map = L.map('map', { zoomControl: false }).setView([-38.955, -68.16], 13);
       L.control.zoom({ position: 'topright' }).addTo(map);
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 18,
-        attribution: '&copy; OpenStreetMap'
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        maxZoom: 19,
+        attribution: '&copy; CartoDB &copy; OpenStreetMap'
       }).addTo(map);
 
       capaRuta = L.layerGroup().addTo(map);
+
+      // Rastreo en vivo del usuario estilo Uber
+      if ("geolocation" in navigator) {
+        navigator.geolocation.watchPosition(pos => {
+          usuarioPos = [pos.coords.latitude, pos.coords.longitude];
+          const beaconHtml = `
+            <div class="user-beacon">
+              <div class="user-beacon-pulse"></div>
+              <div class="user-beacon-core"></div>
+            </div>
+          `;
+          const beaconIcon = L.divIcon({ className: '', html: beaconHtml, iconSize: [22, 22], iconAnchor: [11, 11] });
+          if (!usuarioMarker) {
+            usuarioMarker = L.marker(usuarioPos, { icon: beaconIcon, zIndexOffset: 2000 }).addTo(map);
+          } else {
+            usuarioMarker.setLatLng(usuarioPos);
+          }
+        }, () => {}, { enableHighAccuracy: true });
+      }
+
+      // Loop de animación a 60 FPS (Lerp e interpolación)
+      requestAnimationFrame(motorAnimacion);
+    }
+
+    function centrarEnUsuario() {
+      if (usuarioPos) {
+        map.setView(usuarioPos, 15, { animate: true });
+      } else {
+        alert("Obteniendo señal satelital de tu dispositivo...");
+      }
+    }
+
+    function motorAnimacion() {
+      const step = 0.08; // Coeficiente de suavizado
+      for (let id in estadoVehiculos) {
+        const v = estadoVehiculos[id];
+        if (!v.marker) continue;
+
+        // Interpolación lineal lat/lon
+        v.latActual += (v.latTarget - v.latActual) * step;
+        v.lonActual += (v.lonTarget - v.lonActual) * step;
+        v.marker.setLatLng([v.latActual, v.lonActual]);
+
+        // Rotación de flecha indicadora
+        const el = document.getElementById(`arrow-${id}`);
+        if (el && v.bearingTarget !== undefined) {
+          el.style.transform = `rotate(${v.bearingTarget}deg)`;
+        }
+      }
+      requestAnimationFrame(motorAnimacion);
     }
 
     function mostrarRuta(linea, sentidoCode) {
@@ -379,28 +467,23 @@ HTML_TEMPLATE = """
 
       const sentidoActivo = sentidoCode || "HACIA_NEUQUEN";
       const sentidoSecundario = (sentidoActivo === "HACIA_NEUQUEN") ? "HACIA_PLOTTIER" : "HACIA_NEUQUEN";
-
       const colorBase = (linea === "50A") ? "#2ECC71" : "#3B82F6";
-      const colorSec = (linea === "50A") ? "#16A085" : "#1D4ED8";
 
       if (RUTAS_GEO[linea][sentidoSecundario]) {
         capaRuta.addLayer(L.polyline(RUTAS_GEO[linea][sentidoSecundario], {
-          color: colorSec,
-          weight: 3.5,
-          opacity: 0.6,
-          lineJoin: 'round'
+          color: "#45475A",
+          weight: 3,
+          opacity: 0.5
         }));
       }
 
       if (RUTAS_GEO[linea][sentidoActivo]) {
         capaRuta.addLayer(L.polyline(RUTAS_GEO[linea][sentidoActivo], {
           color: colorBase,
-          weight: 6,
-          opacity: 0.95,
-          lineJoin: 'round'
+          weight: 5,
+          opacity: 0.95
         }));
       }
-
       document.getElementById('btn-clear').style.display = 'block';
     }
 
@@ -416,111 +499,107 @@ HTML_TEMPLATE = """
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
-    function iniciarCooldown(segundos) {
-      const btn = document.getElementById('btn');
-      btn.disabled = true;
-      let restante = segundos;
-      
-      clearInterval(cooldownTimer);
-      cooldownTimer = setInterval(() => {
-        restante--;
-        if (restante <= 0) {
-          clearInterval(cooldownTimer);
-          btn.disabled = false;
-          btn.innerText = "Actualizar";
-        } else {
-          btn.innerText = `Espera (${restante}s)`;
-        }
-      }, 1000);
-    }
-
     async function pedirDatos() {
       const status = document.getElementById('status');
-
       try {
         const res = await fetch('/api/arribos');
         const data = await res.json();
-        
         renderTarjetas(data.items);
-        actualizarMapa(data.buses);
-
-        status.innerText = "Actualizado: " + data.hora;
-        iniciarCooldown(5);
+        actualizarFlota(data.buses);
+        status.innerText = "Sincronizado: " + data.hora;
       } catch (err) {
-        status.innerText = "Reintentando sincronización...";
+        status.innerText = "Reintentando conexión...";
       }
     }
 
-    function actualizarMapa(buses) {
+    function actualizarFlota(buses) {
       const countLabel = document.getElementById('bus-count');
       if (!buses || buses.length === 0) {
-        countLabel.innerText = "Sin unidades reportando con GPS";
+        countLabel.innerText = "Sin unidades en línea";
         return;
       }
 
       const activos = buses.filter(b => b.estado === 'activo').length;
-      const perdidos = buses.filter(b => b.estado === 'perdido').length;
-      countLabel.innerText = `🚌 ${activos} en camino (GPS)${perdidos > 0 ? ' | ⚠️ ' + perdidos + ' señal débil' : ''}`;
+      const estimados = buses.filter(b => b.estado === 'estimado').length;
+      countLabel.innerText = `${activos} GPS activo${estimados > 0 ? ' | ' + estimados + ' estimados' : ''}`;
 
-      const idsRecibidos = new Set();
+      const idsServer = new Set();
 
       buses.forEach(b => {
-        if (!b.lat || !b.lon || isNaN(b.lat) || isNaN(b.lon)) return;
+        if (!b.lat || !b.lon) return;
+        idsServer.add(b.id);
 
-        idsRecibidos.add(b.id);
-        const esPerdido = (b.estado === 'perdido');
-        
-        let claseCss = "bus-marker-50b";
-        if (b.linea === "50A") claseCss = "bus-marker-50a";
-        else if (b.linea === "50R") claseCss = "bus-marker-50r";
-        
-        if (esPerdido) claseCss = "bus-marker-lost";
+        const snapped = snapATraza(b.lat, b.lon, b.linea, b.sentido_code);
+        const esEstimado = (b.estado === 'estimado');
 
-        const iconoHtml = `<div class="bus-marker ${claseCss}">${esPerdido ? '⚠️' : '🚌'} ${b.linea}</div>`;
-        const icon = L.divIcon({
-          className: 'custom-icon',
-          html: iconoHtml,
-          iconSize: [58, 24],
-          iconAnchor: [29, 12]
-        });
+        let claseLinea = "puck-50b";
+        if (b.linea === "50A") claseLinea = "puck-50a";
+        else if (b.linea === "50R") claseLinea = "puck-50r";
+        if (esEstimado) claseLinea += " puck-dr";
 
-        const sentidoTexto = (b.sentido_code === 'HACIA_NEUQUEN') ? '🟠 Hacia Neuquén' : '🟢 Hacia Plottier';
-        const estadoColor = esPerdido ? '#e74c3c' : (b.sentido_code === 'HACIA_NEUQUEN' ? '#FAB387' : '#A6E3A1');
+        let distUsuarioTxt = "";
+        if (usuarioPos) {
+          const dM = Math.round(distanciaMetros(usuarioPos[0], usuarioPos[1], snapped.lat, snapped.lon));
+          distUsuarioTxt = (dM < 1000) ? ` • a ${dM} m de vos` : ` • a ${(dM/1000).toFixed(1)} km`;
+        }
 
-        const tiempoTexto = b.tiempo_cabecera 
-          ? `<div style="color: #27ae60; font-weight: bold; margin-top: 5px;">⏱️ Arribo cabecera: ${b.tiempo_cabecera}</div>` 
-          : `<div style="color: #7f8c8d; font-style: italic; margin-top: 5px;">📍 En trayecto</div>`;
-
-        const contenidoPopup = `
-          <div style="font-family: sans-serif; font-size: 13px; line-height: 1.4; min-width: 170px;">
-            <strong style="color: #111; font-size: 14px;">Línea ${b.linea}</strong><br>
-            <span style="color: ${estadoColor}; font-weight: 700;">${sentidoTexto}</span><br>
-            <span style="color: #555; font-size: 12px;">Ramal: ${b.ramal}</span>
-            ${tiempoTexto}
+        const htmlPuck = `
+          <div class="uber-puck">
+            <div class="puck-body ${claseLinea}">
+              <span class="puck-arrow" id="arrow-${b.id}">➤</span>
+              <span>${b.linea}</span>
+              <span style="font-size:9px; opacity:0.8">${esEstimado ? 'EST' : 'GPS'}</span>
+            </div>
           </div>
         `;
 
-        if (marcadores[b.id]) {
-          marcadores[b.id].setLatLng([b.lat, b.lon]);
-          marcadores[b.id].setIcon(icon);
-          marcadores[b.id].getPopup().setContent(contenidoPopup);
-        } else {
-          const marker = L.marker([b.lat, b.lon], { icon: icon });
-          marker.bindPopup(contenidoPopup);
-          
-          marker.on('click', () => {
-            mostrarRuta(b.linea, b.sentido_code);
-          });
+        const icon = L.divIcon({
+          className: '',
+          html: htmlPuck,
+          iconSize: [72, 28],
+          iconAnchor: [36, 14]
+        });
 
-          marker.addTo(map);
-          marcadores[b.id] = marker;
+        const sentidoTxt = (b.sentido_code === 'HACIA_NEUQUEN') ? '🟠 Hacia Neuquén' : '🟢 Hacia Plottier';
+        const popupHtml = `
+          <div style="font-family: sans-serif; font-size: 13px; line-height: 1.4; color: #111;">
+            <strong>Línea ${b.linea}</strong> (${b.ramal})<br>
+            <span style="font-weight: 700;">${sentidoTxt}</span><br>
+            <small style="color: #666;">Estado: ${esEstimado ? 'Navegación estimada (sin señal directa)' : 'Transmisión satelital activa'}</small>
+            ${b.tiempo_cabecera ? `<div style="color: #059669; font-weight: bold; margin-top: 4px;">⏱️ Arribo: ${b.tiempo_cabecera}</div>` : ''}
+          </div>
+        `;
+
+        if (estadoVehiculos[b.id]) {
+          // El coche ya existe: se actualiza el target para animación fluida continua
+          estadoVehiculos[b.id].latTarget = snapped.lat;
+          estadoVehiculos[b.id].lonTarget = snapped.lon;
+          estadoVehiculos[b.id].bearingTarget = snapped.bearing;
+          estadoVehiculos[b.id].marker.setIcon(icon);
+          estadoVehiculos[b.id].marker.getPopup().setContent(popupHtml);
+        } else {
+          // Alta de nueva unidad con coordenadas suavizadas
+          const marker = L.marker([snapped.lat, snapped.lon], { icon: icon }).addTo(map);
+          marker.bindPopup(popupHtml);
+          marker.on('click', () => mostrarRuta(b.linea, b.sentido_code));
+
+          estadoVehiculos[b.id] = {
+            id: b.id,
+            marker: marker,
+            latActual: snapped.lat,
+            lonActual: snapped.lon,
+            latTarget: snapped.lat,
+            lonTarget: snapped.lon,
+            bearingTarget: snapped.bearing
+          };
         }
       });
 
-      for (let id in marcadores) {
-        if (!idsRecibidos.has(id)) {
-          map.removeLayer(marcadores[id]);
-          delete marcadores[id];
+      // Eliminación limpia de coches obsoletos
+      for (let id in estadoVehiculos) {
+        if (!idsServer.has(id)) {
+          map.removeLayer(estadoVehiculos[id].marker);
+          delete estadoVehiculos[id];
         }
       }
     }
@@ -535,39 +614,31 @@ HTML_TEMPLATE = """
           html += `<div class="section-title">📍 ${secActual}</div>`;
         }
 
-        let tagClase = "line-50b";
-        if (item.linea === "50A") tagClase = "line-50a";
-        else if (item.linea === "50R") tagClase = "line-50r";
-
         html += `<div class="card">
           <div class="card-header">
-            <span class="line-tag ${tagClase}">Línea ${item.linea}</span>
+            <span class="line-tag">Línea ${item.linea}</span>
             <span class="stop-tag">Cabecera ${item.parada}</span>
           </div>`;
 
         if (!item.arribos || item.arribos.length === 0) {
-          html += `<div class="empty">Sin unidades reportando en este momento</div>`;
+          html += `<div style="font-size:12px; color:#6C7086; padding: 4px 0;">Sin salidas registradas en este momento</div>`;
         } else {
           item.arribos.forEach(c => {
-            const tieneGps = (c.lat && c.lon && Math.abs(c.lat) > 1);
-            const botonVer = tieneGps 
-              ? `<button class="btn-action" onclick="centrarEn(${c.lat}, ${c.lon}, '${item.linea}', '${c.sentido_code}')">Ver en Mapa</button>` 
-              : '';
-
-            const badgeClass = (c.sentido_code === 'HACIA_NEUQUEN') ? 'badge-neuquen' : 'badge-plottier';
-            const badgeIcon = (c.sentido_code === 'HACIA_NEUQUEN') ? '🟠' : '🟢';
+            const tienePos = (c.lat && c.lon);
+            let distTxt = "";
+            if (tienePos && usuarioPos) {
+              const dM = Math.round(distanciaMetros(usuarioPos[0], usuarioPos[1], c.lat, c.lon));
+              distTxt = `<div class="dist-user">📍 A ${(dM < 1000) ? dM + ' m' : (dM/1000).toFixed(1) + ' km'} de tu ubicación</div>`;
+            }
 
             html += `<div class="arrival-row">
               <div>
-                <div class="branch-row">
-                  <span class="branch">${c.ramal}</span>
-                  <span class="badge-status ${badgeClass}">${badgeIcon} ${c.sentido}</span>
-                </div>
-                <div class="time-label">Próximo arribo: <span class="time-val">${c.tiempo}</span></div>
-                ${!tieneGps ? '<div class="no-gps-hint">⏳ Salida programada (sin GPS activo)</div>' : ''}
+                <div style="font-size: 13px; font-weight: 600;">${c.ramal} <span style="font-size: 11px; opacity: 0.8">(${c.sentido})</span></div>
+                <div style="font-size: 12px; color: #A6ADC8;">Próximo arribo: <span class="time-val">${c.tiempo}</span></div>
+                ${distTxt}
               </div>
               <div>
-                ${botonVer}
+                ${tienePos ? `<button class="btn-action" onclick="centrarEn(${c.lat}, ${c.lon}, '${item.linea}', '${c.sentido_code}')">Rastrear</button>` : ''}
               </div>
             </div>`;
           });
@@ -580,36 +651,22 @@ HTML_TEMPLATE = """
 
     initMap();
     pedirDatos();
-
-    setInterval(pedirDatos, 30000);
+    setInterval(pedirDatos, 25000);
   </script>
 </body>
 </html>
 """
 
+
 @app.route('/ping')
 def ping():
     return "OK", 200
+
 
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/manifest.json')
-def manifest():
-    return jsonify({
-        "name": "Colectivos Plottier",
-        "short_name": "Bondis 50",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#181825",
-        "theme_color": "#181825",
-        "icons": [{
-            "src": "https://cdn-icons-png.flaticon.com/512/1048/1048314.png",
-            "sizes": "512x512",
-            "type": "image/png"
-        }]
-    })
 
 @app.route('/api/arribos')
 def api_arribos():
@@ -706,7 +763,7 @@ def api_arribos():
         except Exception:
             pass
 
-    # 1. Deduplicación dentro de la misma ronda (solo descarta si es el mismo coche reportado dos veces a < 45 metros)
+    # Deduplicación de precisión (45 metros)
     buses_unicos_ronda = []
     for b in buses_leidos_ronda:
         es_duplicado = False
@@ -721,7 +778,7 @@ def api_arribos():
         if not es_duplicado:
             buses_unicos_ronda.append(b)
 
-    # 2. Seguimiento en memoria: ventana de 900m por sentido (no colisiona coches opuestos ni deja fantasmas al acelerar)
+    # Motor de seguimiento satelital
     for b in buses_unicos_ronda:
         bus_match_id = None
         menor_distancia = 0.90
@@ -756,6 +813,7 @@ def api_arribos():
                 "last_seen": ahora
             }
 
+    # Depuración por expiración real (6 minutos sin contacto satelital ni estimado)
     flota_memoria = {k: v for k, v in flota_memoria.items() if (ahora - v["last_seen"]) < TIEMPO_EXPIRAR}
 
     if consultas_ok > 0 or not cabeceras_memoria:
@@ -769,11 +827,13 @@ def api_arribos():
         "from_cache": False
     })
 
+
 def serializar_flota(ahora):
     lista = []
     for bus_id, datos in flota_memoria.items():
         inactivo = ahora - datos["last_seen"]
-        estado = "perdido" if inactivo > TIEMPO_PERDIDO else "activo"
+        # Dead Reckoning: si pasaron más de 60s sin reporte, pasa a navegación estimada
+        estado = "estimado" if inactivo > TIEMPO_DEAD_RECKONING else "activo"
         lista.append({
             "id": datos["id"],
             "linea": datos["linea"],
@@ -787,8 +847,7 @@ def serializar_flota(ahora):
         })
     return lista
 
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-
-```
