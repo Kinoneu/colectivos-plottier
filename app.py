@@ -4,6 +4,7 @@ import time
 import math
 import urllib3
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, jsonify, render_template_string
 import requests
 
@@ -14,14 +15,23 @@ app = Flask(__name__)
 URL_PAGINA = "https://cuandollega.smartmovepro.net/indalo/recorridos"
 URL_API = f"{URL_PAGINA}?handler=Arribos"
 
-PARADAS_INTERMEDIAS_ROTATIVAS = [
-    {"parada": "NV1058", "linea": "50B", "cod": "1014"},
-    {"parada": "NV1032", "linea": "50A", "cod": "1013"},
-    {"parada": "NV1244", "linea": "50B", "cod": "1014"},
-    {"parada": "NV1244", "linea": "50A", "cod": "1013"},
-    {"parada": "NV1032", "linea": "50R", "cod": "1015"},
+# Malla estratégica de radar: 8 paradas que cubren todo el trayecto Plottier - Neuquén
+# 50A: 1013 | 50B: 1014 | 50R: 1015
+PARADAS_RADAR = [
+    # Cabeceras oficiales visibles en tarjetas
+    {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "cod": "1014", "mostrar": True},
+    {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "cod": "1013", "mostrar": True},
+
+    # Radar de barrido rápido en paralelo (sin puntos ciegos)
+    {"seccion": "BARRIDO", "parada": "NV1058", "linea": "50B", "cod": "1014", "mostrar": False},
+    {"seccion": "BARRIDO", "parada": "NV1032", "linea": "50A", "cod": "1013", "mostrar": False},
+    {"seccion": "BARRIDO", "parada": "NV1032", "linea": "50B", "cod": "1014", "mostrar": False},
+    {"seccion": "BARRIDO", "parada": "NV1244", "linea": "50B", "cod": "1014", "mostrar": False},
+    {"seccion": "BARRIDO", "parada": "NV1244", "linea": "50A", "cod": "1013", "mostrar": False},
+    {"seccion": "BARRIDO", "parada": "NV1259", "linea": "50B", "cod": "1014", "mostrar": False},
+    {"seccion": "BARRIDO", "parada": "NV1032", "linea": "50R", "cod": "1015", "mostrar": False},
+    {"seccion": "BARRIDO", "parada": "NV1244", "linea": "50R", "cod": "1015", "mostrar": False},
 ]
-indice_rotativo = 0
 
 session = requests.Session()
 session.headers.update({
@@ -30,9 +40,9 @@ session.headers.update({
 })
 csrf_token = None
 
-CACHE_TTL = 18
-TIEMPO_PERDIDO = 80
-TIEMPO_EXPIRAR = 200
+CACHE_TTL = 16        # Margen mínimo de consulta a memoria
+TIEMPO_PERDIDO = 85   # Segundos para advertir señal débil
+TIEMPO_EXPIRAR = 200  # Segundos para retirar unidad inactiva
 
 flota_memoria = {}
 cabeceras_memoria = {
@@ -65,11 +75,12 @@ def renovar_token():
     if not csrf_token:
         raise Exception("No se pudo obtener token CSRF.")
 
-def consultar_arribos(parada, cod_linea):
+def consultar_arribos_worker(item):
+    """Función de consulta individual ejecutada concurrentemente en un hilo"""
     global csrf_token
     if not csrf_token:
         renovar_token()
-    
+
     headers = {
         "Accept": "*/*",
         "Content-Type": "application/json",
@@ -78,17 +89,20 @@ def consultar_arribos(parada, cod_linea):
         "RequestVerificationToken": csrf_token,
         "X-Requested-With": "XMLHttpRequest"
     }
-    payload = {"IdentificadorParada": parada, "CodigoLinea": str(cod_linea)}
+    payload = {"IdentificadorParada": item["parada"], "CodigoLinea": str(item["cod"])}
 
-    resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=8)
-    if resp.status_code in (400, 401, 403, 500):
-        time.sleep(0.3)
-        renovar_token()
-        headers["RequestVerificationToken"] = csrf_token
-        resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=8)
-
-    resp.raise_for_status()
-    return resp.json().get("arribos", [])
+    try:
+        resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=7)
+        if resp.status_code in (400, 401, 403, 500):
+            time.sleep(0.3)
+            renovar_token()
+            headers["RequestVerificationToken"] = csrf_token
+            resp = session.post(URL_API, json=payload, headers=headers, verify=False, timeout=7)
+        
+        resp.raise_for_status()
+        return item, resp.json().get("arribos", [])
+    except Exception:
+        return item, []
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -292,7 +306,7 @@ HTML_TEMPLATE = """
     <button id="btn" class="btn-refresh" onclick="pedirDatos()">Actualizar</button>
     <div class="status-box">
       <div id="status" class="status-text">Iniciando...</div>
-      <div id="hint" class="cached-hint">Auto-refresco: Activo (30s)</div>
+      <div id="hint" class="cached-hint">Radar ultrarrápido activo</div>
     </div>
   </div>
 
@@ -414,7 +428,7 @@ HTML_TEMPLATE = """
         actualizarMapa(data.buses);
 
         status.innerText = "Actualizado: " + data.hora;
-        iniciarCooldown(5);
+        iniciarCooldown(4);
       } catch (err) {
         status.innerText = "Reintentando sincronización...";
       }
@@ -550,7 +564,8 @@ HTML_TEMPLATE = """
     initMap();
     pedirDatos();
 
-    setInterval(pedirDatos, 30000);
+    // Auto-refresco constante cada 25 segundos
+    setInterval(pedirDatos, 25000);
   </script>
 </body>
 </html>
@@ -582,9 +597,10 @@ def manifest():
 
 @app.route('/api/arribos')
 def api_arribos():
-    global flota_memoria, cabeceras_memoria, ultima_hora_sync, ultimo_escaneo_ts, indice_rotativo
+    global flota_memoria, cabeceras_memoria, ultima_hora_sync, ultimo_escaneo_ts
     ahora = time.time()
 
+    # Si pasaron menos de CACHE_TTL segundos, entregamos la memoria al instante (en 5 milisegundos)
     if (ahora - ultimo_escaneo_ts) < CACHE_TTL and cabeceras_memoria:
         return jsonify({
             "hora": ultima_hora_sync,
@@ -593,89 +609,83 @@ def api_arribos():
             "from_cache": True
         })
 
-    consultas_a_ejecutar = [
-        {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "cod": "1014", "mostrar": True},
-        {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "cod": "1013", "mostrar": True},
-    ]
-
-    if PARADAS_INTERMEDIAS_ROTATIVAS:
-        intermedia = PARADAS_INTERMEDIAS_ROTATIVAS[indice_rotativo]
-        consultas_a_ejecutar.append({**intermedia, "seccion": "BARRIDO", "mostrar": False})
-        indice_rotativo = (indice_rotativo + 1) % len(PARADAS_INTERMEDIAS_ROTATIVAS)
+    # Disparo en paralelo de todas las paradas estratégicas simultáneamente
+    resultados_paradas = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(consultar_arribos_worker, p) for p in PARADAS_RADAR]
+        for f in as_completed(futures):
+            item, arribos_raw = f.result()
+            resultados_paradas.append((item, arribos_raw))
 
     consultas_ok = 0
     buses_leidos_ronda = []
 
-    for item in consultas_a_ejecutar:
-        try:
-            arribos_raw = consultar_arribos(item["parada"], item["cod"])
-            arribos_limpios = []
-            es_cabecera = (item["seccion"] == "CABECERA")
+    for item, arribos_raw in resultados_paradas:
+        arribos_limpios = []
+        es_cabecera = (item["seccion"] == "CABECERA")
 
-            for c in arribos_raw:
-                lat = c.get("latitud")
-                lon = c.get("longitud")
-                tiempo = c.get("tiempoRestanteArribo", "Sin datos")
-                ramal = c.get("descripcionBandera", item["linea"])
+        for c in arribos_raw:
+            lat = c.get("latitud")
+            lon = c.get("longitud")
+            tiempo = c.get("tiempoRestanteArribo", "Sin datos")
+            ramal = c.get("descripcionBandera", item["linea"])
 
-                ramal_upper = str(ramal).upper()
-                if "VUELTA" in ramal_upper:
-                    sentido = "Hacia Plottier"
-                    sentido_code = "HACIA_PLOTTIER"
-                elif "IDA" in ramal_upper:
-                    sentido = "Hacia Neuquén"
-                    sentido_code = "HACIA_NEUQUEN"
-                else:
-                    sentido = "Hacia Neuquén" if es_cabecera else "Hacia Plottier"
-                    sentido_code = "HACIA_NEUQUEN" if es_cabecera else "HACIA_PLOTTIER"
+            # Criterio oficial: IDA = Sale de Plottier hacia Neuquén. VUELTA = Vuelve a Plottier.
+            ramal_upper = str(ramal).upper()
+            if "VUELTA" in ramal_upper:
+                sentido = "Hacia Plottier"
+                sentido_code = "HACIA_PLOTTIER"
+            elif "IDA" in ramal_upper:
+                sentido = "Hacia Neuquén"
+                sentido_code = "HACIA_NEUQUEN"
+            else:
+                sentido = "Hacia Neuquén" if es_cabecera else "Hacia Plottier"
+                sentido_code = "HACIA_NEUQUEN" if es_cabecera else "HACIA_PLOTTIER"
 
-                f_lat, f_lon = None, None
-                if lat and lon and str(lat).strip() and str(lon).strip():
-                    try:
-                        f_lat = float(str(lat).replace(',', '.').strip())
-                        f_lon = float(str(lon).replace(',', '.').strip())
-                        if abs(f_lat) < 1 or abs(f_lon) < 1:
-                            f_lat, f_lon = None, None
-                    except ValueError:
+            f_lat, f_lon = None, None
+            if lat and lon and str(lat).strip() and str(lon).strip():
+                try:
+                    f_lat = float(str(lat).replace(',', '.').strip())
+                    f_lon = float(str(lon).replace(',', '.').strip())
+                    if abs(f_lat) < 1 or abs(f_lon) < 1:
                         f_lat, f_lon = None, None
-
-                if item["mostrar"]:
-                    arribos_limpios.append({
-                        "tiempo": tiempo,
-                        "ramal": ramal,
-                        "sentido": sentido,
-                        "sentido_code": sentido_code,
-                        "lat": f_lat,
-                        "lon": f_lon
-                    })
-
-                if f_lat and f_lon:
-                    buses_leidos_ronda.append({
-                        "linea": item["linea"],
-                        "ramal": ramal,
-                        "sentido": sentido,
-                        "sentido_code": sentido_code,
-                        "tiempo": tiempo,
-                        "es_cabecera": es_cabecera,
-                        "lat": f_lat,
-                        "lon": f_lon
-                    })
+                except ValueError:
+                    f_lat, f_lon = None, None
 
             if item["mostrar"]:
-                clave_cab = (item["parada"], item["linea"])
-                cabeceras_memoria[clave_cab] = {
-                    "seccion": "CABECERA",
-                    "parada": item["parada"],
+                arribos_limpios.append({
+                    "tiempo": tiempo,
+                    "ramal": ramal,
+                    "sentido": sentido,
+                    "sentido_code": sentido_code,
+                    "lat": f_lat,
+                    "lon": f_lon
+                })
+
+            if f_lat and f_lon:
+                buses_leidos_ronda.append({
                     "linea": item["linea"],
-                    "arribos": arribos_limpios
-                }
+                    "ramal": ramal,
+                    "sentido": sentido,
+                    "sentido_code": sentido_code,
+                    "tiempo": tiempo,
+                    "es_cabecera": es_cabecera,
+                    "lat": f_lat,
+                    "lon": f_lon
+                })
 
-            consultas_ok += 1
-            time.sleep(0.3)
-        except Exception:
-            pass
+        if item["mostrar"]:
+            clave_cab = (item["parada"], item["linea"])
+            cabeceras_memoria[clave_cab] = {
+                "seccion": "CABECERA",
+                "parada": item["parada"],
+                "linea": item["linea"],
+                "arribos": arribos_limpios
+            }
 
-    # 1. Deduplicación dentro de la misma ronda (solo descarta si es el mismo coche reportado dos veces a < 45 metros)
+        consultas_ok += 1
+
+    # 1. Deduplicación estricta intra-ronda: Solo une si es exactamente el mismo sentido a menos de 45 metros
     buses_unicos_ronda = []
     for b in buses_leidos_ronda:
         es_duplicado = False
@@ -690,7 +700,7 @@ def api_arribos():
         if not es_duplicado:
             buses_unicos_ronda.append(b)
 
-    # 2. Seguimiento en memoria: ventana de 900m por sentido (no colisiona coches opuestos ni deja fantasmas al acelerar)
+    # 2. Seguimiento de trayectoria inter-ciclo: Ventana de 900m por sentido sin colisión de coches opuestos
     for b in buses_unicos_ronda:
         bus_match_id = None
         menor_distancia = 0.90
