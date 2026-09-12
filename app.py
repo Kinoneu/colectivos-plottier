@@ -14,7 +14,6 @@ app = Flask(__name__)
 URL_PAGINA = "https://cuandollega.smartmovepro.net/indalo/recorridos"
 URL_API = f"{URL_PAGINA}?handler=Arribos"
 
-# Cabeceras fijas siempre activas + paradas intermedias en rotación liviana
 PARADAS_INTERMEDIAS_ROTATIVAS = [
     {"parada": "NV1058", "linea": "50B", "cod": "1014"},
     {"parada": "NV1032", "linea": "50A", "cod": "1013"},
@@ -33,7 +32,7 @@ csrf_token = None
 
 CACHE_TTL = 18
 TIEMPO_PERDIDO = 80
-TIEMPO_EXPIRAR = 220
+TIEMPO_EXPIRAR = 200
 
 flota_memoria = {}
 cabeceras_memoria = {
@@ -307,9 +306,6 @@ HTML_TEMPLATE = """
       return [lat, lon];
     }
 
-    // Trazas métricas oficiales con sentido geográfico verificado:
-    // HACIA_PLOTTIER (Neuquén -> Plottier)
-    // HACIA_NEUQUEN  (Plottier -> Neuquén)
     const TRAZAS_RAW = {
       "50B": {
         "HACIA_PLOTTIER": [[-7576123.127717475,-4713953.225682237],[-7576127.135219142,-4713960.668571745],[-7576140.270919057,-4714625.541017488],[-7575523.672259552,-4714622.5350375585],[-7575533.913652705,-4715537.968661558],[-7578334.266763101,-4715525.657356469],[-7578412.190406656,-4715517.9270097455],[-7578498.129053549,-4715523.939501133],[-7578494.566829843,-4715600.956967883],[-7579108.493821568,-4715589.933986044],[-7579115.72958847,-4715842.177166955],[-7583422.0127703175,-4715796.366361502],[-7583523.090867958,-4715778.757888199],[-7583546.913238986,-4715779.473679201],[-7583639.5310553275,-4715757.141023744],[-7583717.454698882,-4715733.949472043],[-7583945.325696536,-4715679.120273622],[-7584124.772715694,-4715657.360465009],[-7584513.611697037,-4715650.345799814],[-7584585.078810125,-4715654.067866457],[-7584684.821073875,-4715642.042732994],[-7586734.21289938,-4715629.015521161],[-7586895.51484154,-4715621.7145636035],[-7587297.155564321,-4715619.280912253],[-7588442.187846622,-4715419.723488214],[-7588664.270230753,-4715194.25981618],[-7590284.970697214,-4713564.914808015],[-7590591.87853333,-4714429.581617774],[-7590632.510147468,-4714417.701074614],[-7590624.4951441325,-4713756.849877528],[-7594854.635794276,-4713713.624809864],[-7594851.518848535,-4712383.6136334315],[-7596173.103843232,-4712371.878595528],[-7596505.837801212,-4712371.306155002],[-7596507.062315612,-4712007.097415341],[-7596821.09459914,-4712010.675040777],[-7596824.768142336,-4711714.451925238],[-7597492.351128625,-4711704.291768824],[-7597495.690713347,-4711684.114586941],[-7597586.861376307,-4711683.685285635],[-7597684.154611261,-4711690.840309779],[-7597727.45789318,-4711685.545591426],[-7597782.672360612,-4711685.259390514],[-7597844.788636475,-4711680.966377784],[-7597998.52085326,-4711678.390571015],[-7598051.731569858,-4711679.249173199],[-7598168.394396211,-4711676.244065874],[-7598169.618910611,-4711685.545591426],[-7598514.820651559,-4711685.974892813],[-7598512.816900725,-4712308.0516757555],[-7598463.279727323,-4712301.611762196],[-7598446.470484212,-4712292.166563034],[-7598173.626412278,-4712256.103156181],[-7598125.425072765,-4712247.65975801],[-7598058.85601727,-4712240.361233048],[-7597865.271422781,-4712214.744883052],[-7597575.506788245,-4712170.810846718],[-7597547.676915548,-4712165.9451996675],[-7597528.752602113,-4712163.798591416],[-7597513.947109837,-4712164.943449095],[-7597508.492454789,-4712161.938197968],[-7597509.049052242,-4712127.8787473785],[-7597488.900224409,-4712119.864775614],[-7597477.5456363475,-4712111.850810179],[-7597471.200425373,-4712047.309997799],[-7596829.220921968,-4712055.46701795],[-7596829.220921968,-4712382.75497166],[-7596173.437801706,-4712373.16658683],[-7596170.654814434,-4713035.3588711675],[-7595380.954346748,-4713041.083652457],[-7595378.505317951,-4713714.054197047],[-7594863.763992522,-4713715.342358708],[-7594864.097950994,-4714610.94055188],[-7595153.1946685845,-4714615.807371415],[-7595602.257494444,-4714856.431565999],[-7595629.085491726,-4714867.740041546],[-7595630.866603578,-4714928.720139591],[-7595924.750059273,-4714929.292724408],[-7596190.469683797,-4714997.287401224],[-7596213.178859917,-4715768.307345327],[-7596826.437934698,-4715759.288392326],[-7596826.437934698,-4715656.644682625],[-7597004.326480986,-4715716.341107085],[-7597005.550995384,-4715740.248406765],[-7597262.2537411535,-4715780.332628469]],
@@ -321,36 +317,12 @@ HTML_TEMPLATE = """
       }
     };
 
-    // Pre-conversión global a Lat/Lon para máxima velocidad en navegador
     const RUTAS_GEO = {};
     for (let l in TRAZAS_RAW) {
       RUTAS_GEO[l] = {};
       for (let s in TRAZAS_RAW[l]) {
         RUTAS_GEO[l][s] = TRAZAS_RAW[l][s].map(p => mercatorALatLon(p[0], p[1]));
       }
-    }
-
-    function distanciaMinima(puntos, lat, lon) {
-      let minDist = Infinity;
-      for (let i = 0; i < puntos.length; i++) {
-        const d = Math.hypot(puntos[i][0] - lat, puntos[i][1] - lon);
-        if (d < minDist) minDist = d;
-      }
-      return minDist;
-    }
-
-    function determinarSentido(linea, lat, lon, ramal) {
-      if (RUTAS_GEO[linea]) {
-        const dPlot = distanciaMinima(RUTAS_GEO[linea]["HACIA_PLOTTIER"], lat, lon);
-        const dNqn = distanciaMinima(RUTAS_GEO[linea]["HACIA_NEUQUEN"], lat, lon);
-        if (Math.abs(dPlot - dNqn) > 0.0004) {
-          return (dPlot < dNqn) ? "HACIA_PLOTTIER" : "HACIA_NEUQUEN";
-        }
-      }
-      const r = String(ramal || "").toUpperCase();
-      if (r.includes("IDA")) return "HACIA_NEUQUEN";
-      if (r.includes("VUELTA")) return "HACIA_PLOTTIER";
-      return "HACIA_NEUQUEN";
     }
 
     let map;
@@ -370,27 +342,25 @@ HTML_TEMPLATE = """
       capaRuta = L.layerGroup().addTo(map);
     }
 
-    function mostrarRuta(linea, latBus, lonBus, sentidoForzado) {
+    function mostrarRuta(linea, sentidoCode) {
       capaRuta.clearLayers();
       if (!RUTAS_GEO[linea]) return;
 
-      const sentidoActivo = sentidoForzado || (latBus && lonBus ? determinarSentido(linea, latBus, lonBus, '') : "HACIA_NEUQUEN");
+      const sentidoActivo = sentidoCode || "HACIA_NEUQUEN";
       const sentidoSecundario = (sentidoActivo === "HACIA_NEUQUEN") ? "HACIA_PLOTTIER" : "HACIA_NEUQUEN";
 
       const colorBase = (linea === "50A") ? "#2ECC71" : "#3B82F6";
       const colorSec = (linea === "50A") ? "#16A085" : "#1D4ED8";
 
-      // 1. Trazado del sentido secundario de fondo
       if (RUTAS_GEO[linea][sentidoSecundario]) {
         capaRuta.addLayer(L.polyline(RUTAS_GEO[linea][sentidoSecundario], {
           color: colorSec,
           weight: 3.5,
-          opacity: 0.7,
+          opacity: 0.6,
           lineJoin: 'round'
         }));
       }
 
-      // 2. Trazado principal del sentido activo
       if (RUTAS_GEO[linea][sentidoActivo]) {
         capaRuta.addLayer(L.polyline(RUTAS_GEO[linea][sentidoActivo], {
           color: colorBase,
@@ -408,10 +378,10 @@ HTML_TEMPLATE = """
       document.getElementById('btn-clear').style.display = 'none';
     }
 
-    function centrarEn(lat, lon, linea, sentido) {
+    function centrarEn(lat, lon, linea, sentidoCode) {
       if (!lat || !lon) return;
       map.setView([lat, lon], 15, { animate: true });
-      mostrarRuta(linea, lat, lon, sentido);
+      mostrarRuta(linea, sentidoCode);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
@@ -483,9 +453,8 @@ HTML_TEMPLATE = """
           iconAnchor: [29, 12]
         });
 
-        const sentidoClave = determinarSentido(b.linea, b.lat, b.lon, b.ramal);
-        const sentidoTexto = (sentidoClave === 'HACIA_NEUQUEN') ? '🟠 Hacia Neuquén' : '🟢 Hacia Plottier';
-        const estadoColor = esPerdido ? '#e74c3c' : (sentidoClave === 'HACIA_NEUQUEN' ? '#FAB387' : '#A6E3A1');
+        const sentidoTexto = (b.sentido_code === 'HACIA_NEUQUEN') ? '🟠 Hacia Neuquén' : '🟢 Hacia Plottier';
+        const estadoColor = esPerdido ? '#e74c3c' : (b.sentido_code === 'HACIA_NEUQUEN' ? '#FAB387' : '#A6E3A1');
 
         const tiempoTexto = b.tiempo_cabecera 
           ? `<div style="color: #27ae60; font-weight: bold; margin-top: 5px;">⏱️ Arribo cabecera: ${b.tiempo_cabecera}</div>` 
@@ -509,7 +478,7 @@ HTML_TEMPLATE = """
           marker.bindPopup(contenidoPopup);
           
           marker.on('click', () => {
-            mostrarRuta(b.linea, b.lat, b.lon, sentidoClave);
+            mostrarRuta(b.linea, b.sentido_code);
           });
 
           marker.addTo(map);
@@ -624,7 +593,6 @@ def api_arribos():
             "from_cache": True
         })
 
-    # Consulta siempre ambas cabeceras principales + 1 intermedia en rotación
     consultas_a_ejecutar = [
         {"seccion": "CABECERA", "parada": "NV2000", "linea": "50B", "cod": "1014", "mostrar": True},
         {"seccion": "CABECERA", "parada": "NV1014", "linea": "50A", "cod": "1013", "mostrar": True},
@@ -650,7 +618,6 @@ def api_arribos():
                 tiempo = c.get("tiempoRestanteArribo", "Sin datos")
                 ramal = c.get("descripcionBandera", item["linea"])
 
-                # Criterio oficial: IDA = Sale de Plottier hacia Neuquén. VUELTA = Vuelve a Plottier.
                 ramal_upper = str(ramal).upper()
                 if "VUELTA" in ramal_upper:
                     sentido = "Hacia Plottier"
@@ -708,15 +675,32 @@ def api_arribos():
         except Exception:
             pass
 
-    # Deduplicación con umbral preciso (300 metros) para no fusionar coches diferentes
+    # 1. Deduplicación dentro de la misma ronda (solo descarta si es el mismo coche reportado dos veces a < 45 metros)
+    buses_unicos_ronda = []
     for b in buses_leidos_ronda:
-        bus_match_id = None
-        for bus_id, datos in flota_memoria.items():
-            if datos["linea"] == b["linea"]:
-                dist = calcular_distancia(datos["lat"], datos["lon"], b["lat"], b["lon"])
-                if dist < 0.30:  # Misma unidad en movimiento o reporte cercano
-                    bus_match_id = bus_id
+        es_duplicado = False
+        for u in buses_unicos_ronda:
+            if u["linea"] == b["linea"] and u["sentido_code"] == b["sentido_code"]:
+                if calcular_distancia(u["lat"], u["lon"], b["lat"], b["lon"]) < 0.045:
+                    es_duplicado = True
+                    if b["es_cabecera"] and not u["es_cabecera"]:
+                        u["tiempo"] = b["tiempo"]
+                        u["es_cabecera"] = True
                     break
+        if not es_duplicado:
+            buses_unicos_ronda.append(b)
+
+    # 2. Seguimiento en memoria: ventana de 900m por sentido (no colisiona coches opuestos ni deja fantasmas al acelerar)
+    for b in buses_unicos_ronda:
+        bus_match_id = None
+        menor_distancia = 0.90
+
+        for bus_id, datos in flota_memoria.items():
+            if datos["linea"] == b["linea"] and datos["sentido_code"] == b["sentido_code"]:
+                dist = calcular_distancia(datos["lat"], datos["lon"], b["lat"], b["lon"])
+                if dist < menor_distancia:
+                    menor_distancia = dist
+                    bus_match_id = bus_id
 
         if bus_match_id:
             flota_memoria[bus_match_id]["lat"] = b["lat"]
@@ -728,7 +712,7 @@ def api_arribos():
             if b["es_cabecera"]:
                 flota_memoria[bus_match_id]["tiempo_cabecera"] = b["tiempo"]
         else:
-            nuevo_id = f"{b['linea']}_{round(b['lat'], 3)}_{round(b['lon'], 3)}"
+            nuevo_id = f"{b['linea']}_{b['sentido_code']}_{round(b['lat'], 3)}_{round(b['lon'], 3)}"
             flota_memoria[nuevo_id] = {
                 "id": nuevo_id,
                 "linea": b["linea"],
