@@ -17,20 +17,21 @@ URL_API = "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribo
 
 # Paradas clave para rotación en segundo plano (1 cada 3.5s)
 COLA_PARADAS = [
-    # 50A (1013)
-    {"linea": "50A", "cod": "1013", "parada": "NV1014", "cabecera": True},
-    {"linea": "50A", "cod": "1013", "parada": "NV1032", "cabecera": False},
+    # 50A
     {"linea": "50A", "cod": "1013", "parada": "NV1244", "cabecera": True},
-    # 50B (1014)
+    {"linea": "50A", "cod": "1013", "parada": "NV1014", "cabecera": True},
+
+    # 50B
     {"linea": "50B", "cod": "1014", "parada": "NV2000", "cabecera": True},
-    {"linea": "50B", "cod": "1014", "parada": "NV1058", "cabecera": False},
-    {"linea": "50B", "cod": "1014", "parada": "NV4159", "cabecera": True},
-    # 50R (1015)
-    {"linea": "50R", "cod": "1015", "parada": "NV5000", "cabecera": True},
+    {"linea": "50B", "cod": "1014", "parada": "NV4000", "cabecera": True},
+
+    # 50R
     {"linea": "50R", "cod": "1015", "parada": "NV5028", "cabecera": True},
-    # URBANO (1016)
-    {"linea": "URBANO", "cod": "1016", "parada": "NV1032", "cabecera": True},
-    {"linea": "URBANO", "cod": "1016", "parada": "NV1259", "cabecera": True}
+    {"linea": "50R", "cod": "1015", "parada": "NV5000", "cabecera": True},
+
+    # URBANO
+    {"linea": "URBANO", "cod": "1016", "parada": "NV1259", "cabecera": True},
+    {"linea": "URBANO", "cod": "1016", "parada": "NV1032", "cabecera": True}
 ]
 
 ESTADO_GLOBAL = {
