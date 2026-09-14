@@ -39,7 +39,8 @@ HTML_TEMPLATE = """
     #map { height: 350px; width: 100%; background: #11111B; }
     
     .map-badge { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(24, 24, 37, 0.9); backdrop-filter: blur(6px); padding: 5px 12px; border-radius: 8px; font-size: 11px; color: #CDD6F4; border: 1px solid #313244; font-weight: 600; }
-    .btn-clear-route { position: absolute; bottom: 10px; right: 10px; z-index: 1000; background: rgba(24, 24, 37, 0.9); border: 1px solid #45475A; color: #CDD6F4; font-size: 11px; font-weight: 700; padding: 6px 12px; border-radius: 8px; cursor: pointer; display: none; }
+    .map-controls { position: absolute; bottom: 10px; right: 10px; z-index: 1000; display: flex; gap: 6px; }
+    .btn-map-control { background: rgba(24, 24, 37, 0.9); border: 1px solid #45475A; color: #CDD6F4; font-size: 11px; font-weight: 700; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
 
     .section-title { font-size: 14px; color: #F5E0DC; text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 8px; font-weight: 700; }
     .card { background: #1E1E2E; border: 1px solid #313244; border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
@@ -81,17 +82,26 @@ HTML_TEMPLATE = """
     .bus-marker { display: flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 8px; font-size: 11px; font-weight: 800; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.6); }
     .bus-marker-50b { background-color: #1E2D42; border: 2px solid #89B4FA; color: #89B4FA; }
     .bus-marker-50a { background-color: #1E3A24; border: 2px solid #A6E3A1; color: #A6E3A1; }
+
+    /* Estilos del popup de paradas */
+    .stop-popup-title { font-size: 13px; font-weight: 800; color: #111; margin-bottom: 2px; }
+    .stop-popup-desc { font-size: 11px; color: #555; margin-bottom: 8px; }
+    .btn-query-stop { background: #1E1E2E; color: #CDD6F4; border: 1px solid #45475A; padding: 5px 9px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; margin-right: 4px; margin-top: 4px; }
+    .result-box { margin-top: 8px; padding-top: 6px; border-top: 1px solid #ddd; font-size: 12px; }
   </style>
 </head>
 <body>
   <header>
     <h1>Transporte Plottier</h1>
-    <p class="sub">Radar Cloudflare Edge en tiempo real</p>
+    <p class="sub">GPS y paradas en tiempo real (50A y 50B)</p>
   </header>
 
   <div id="map-container">
     <div class="map-badge" id="bus-count">Sincronizando radar...</div>
-    <button class="btn-clear-route" id="btn-clear" onclick="limpiarRuta()">✕ Quitar Recorrido</button>
+    <div class="map-controls">
+      <button class="btn-map-control" id="btn-toggle-stops" onclick="toggleParadas()">📍 Ocultar Paradas</button>
+      <button class="btn-map-control" id="btn-clear" onclick="limpiarRuta()" style="display:none;">✕ Quitar Recorrido</button>
+    </div>
     <div id="map"></div>
   </div>
 
@@ -115,6 +125,77 @@ HTML_TEMPLATE = """
 
   <script>
     const ENDPOINT_WORKER = "https://radar-colectivos.gorolol.workers.dev/";
+
+    const TODAS_LAS_PARADAS = [
+      ["NV1008", -38.959017, -68.106748, "Ruta 22 / Acceso Este"],
+      ["NV1010", -38.958888, -68.117712, "Ruta 22 y Bejarano"],
+      ["NV1025", -38.957974, -68.141026, "Ruta 22 y Saavedra"],
+      ["NV1143", -38.957799, -68.155489, "Ruta 22 y Solalique"],
+      ["NV1029", -38.955654, -68.192332, "Ruta 22 y Río Colorado"],
+      ["NV1027", -38.956455, -68.167527, "Ruta 22 y Crouzeilles"],
+      ["NV1012", -38.956568, -68.167666, "Ruta 22 / Terminal Nqn"],
+      ["NV1013", -38.955613, -68.178095, "Ruta 22 y Gatica"],
+      ["NV1028", -38.955880, -68.185664, "Ruta 22 / Mayor Buratovich"],
+      ["NV1030", -38.955804, -68.196961, "Ruta 22 / La Herradura"],
+      ["NV1031", -38.955563, -68.208768, "Ruta 22 y Constituyentes"],
+      ["NV1032", -38.955388, -68.218424, "Ruta 22 / Acceso Plottier"],
+      ["NV1026", -38.957840, -68.155897, "Ruta 22 / Aeropuerto"],
+      ["NV1011", -38.957999, -68.139772, "Ruta 22 y O'Connor"],
+      ["NV1009", -38.958909, -68.117123, "Ruta 22 y Anaya"],
+      ["NV1014", -38.946381, -68.057601, "Cabecera Neuquén (Mitre)"],
+      ["NV1015", -38.949342, -68.057693, "Sarmiento y San Luis"],
+      ["NV1016", -38.950777, -68.056394, "Láinez y Alcorta"],
+      ["NV1017", -38.950693, -68.053841, "Perito Moreno y Misiones"],
+      ["NV1018", -38.951683, -68.052191, "Bahía Blanca"],
+      ["NV1019", -38.955511, -68.052243, "Ruta 22 y Tierra del Fuego"],
+      ["NV1021", -38.957124, -68.060420, "Ruta 22 y La Pampa"],
+      ["NV1023", -38.957960, -68.147140, "Ruta 22 y El Cholar"],
+      ["NV1024", -38.955619, -68.195944, "Ruta 22 y Futaleufú"],
+      ["NV1034", -38.958992, -68.248224, "San Martín y Candolle"],
+      ["NV1116", -38.959502, -68.088995, "Ruta 22 y Leguizamón"],
+      ["NV1117", -38.959225, -68.095626, "Ruta 22 y Gatica"],
+      ["NV1050", -38.960227, -68.231994, "San Martín y Martellotta"],
+      ["NV1035", -38.964104, -68.239780, "Belgrano y Zabaleta"],
+      ["NV1038", -38.964520, -68.243109, "Belgrano y Libertad"],
+      ["NV1039", -38.962051, -68.243420, "Batilana y Perito Moreno"],
+      ["NV1040", -38.960381, -68.244661, "San Martín y Chivilcoy"],
+      ["NV1041", -38.960362, -68.227848, "San Martín y Río Colorado"],
+      ["NV1042", -38.960357, -68.229405, "San Martín y Percy Clark"],
+      ["NV1043", -38.960336, -68.233364, "San Martín y Bachmann"],
+      ["NV1044", -38.960239, -68.236177, "San Martín y Buratovich"],
+      ["NV1046", -38.961257, -68.238108, "Belgrano y Constituyentes"],
+      ["NV1047", -38.963159, -68.238079, "Belgrano y Güemes"],
+      ["NV1048", -38.963915, -68.238462, "Belgrano y San Carlos"],
+      ["NV1049", -38.964228, -68.240999, "Belgrano y Santa Cruz"],
+      ["NV1051", -38.960069, -68.247066, "San Martín y Maestros Neuquinos"],
+      ["NV1052", -38.959130, -68.249539, "San Martín y Posta de Halada"],
+      ["NV1058", -38.958794, -68.124248, "Ruta 22 / Intermedia San Martín"],
+      ["NV1059", -38.958877, -68.118315, "Ruta 22 y Drury"],
+      ["NV1060", -38.958078, -68.134464, "Ruta 22 y Álvarez"],
+      ["NV1062", -38.955871, -68.198951, "Ruta 22 y Fotheringham"],
+      ["NV1063", -38.955454, -68.211289, "Ruta 22 y Roca"],
+      ["NV1066", -38.956680, -68.226224, "Ruta 22 y Godoy"],
+      ["NV1069", -38.957731, -68.226288, "Ruta 22 y Pellegrini"],
+      ["NV1070", -38.957718, -68.159731, "Ruta 22 y Casimiro Gómez"],
+      ["NV1071", -38.955713, -68.175137, "Ruta 22 y Chaco"],
+      ["NV1136", -38.959289, -68.085507, "Ruta 22 y Jujuy"],
+      ["NV2021", -38.959249, -68.090370, "Ruta 22 y Laínez"],
+      ["NV6043", -38.959504, -68.089109, "Ruta 22 y Misiones"],
+      ["AXION", -38.959108, -68.070216, "Mosconi y Chubut"],
+      ["GATICA 299", -38.959279, -68.073504, "Mosconi y Gatica"],
+      ["RIVAS299", -38.959302, -68.079020, "Mosconi y Rivas"],
+      ["NV1194", -38.950315, -68.175466, "San Martín y Gatica"],
+      ["NV1195", -38.946710, -68.180058, "San Martín y Saavedra"],
+      ["NV1201", -38.949172, -68.187418, "San Martín y Bejarano"],
+      ["NV1202", -38.947912, -68.187633, "San Martín y Solalique"],
+      ["NV1204", -38.946477, -68.187665, "San Martín y Crouzeilles"],
+      ["NV1205", -38.944908, -68.187633, "San Martín / Aeropuerto Norte"],
+      ["NV1160", -38.944516, -68.215055, "Belgrano y Constituyentes"],
+      ["NV1150", -38.944657, -68.197331, "San Martín y Futaleufú"],
+      ["NV1244", -38.930301, -68.252027, "Barrio 108 Viviendas"],
+      ["NV1259", -38.953457, -68.237667, "Constituyentes y Perito Moreno"],
+      ["NV2000", -38.960410, -68.246800, "Cabecera Plottier (50B)"]
+    ];
 
     function mercatorALatLon(x, y) {
       const lon = (x / 20037508.34) * 180;
@@ -144,7 +225,9 @@ HTML_TEMPLATE = """
 
     let map;
     let capaRuta = null;
+    let capaParadas = null;
     let marcadoresBuses = {};
+    let mostrandoParadas = true;
     let cooldownTimer = null;
 
     function initMap() {
@@ -157,6 +240,86 @@ HTML_TEMPLATE = """
       }).addTo(map);
 
       capaRuta = L.layerGroup().addTo(map);
+      capaParadas = L.layerGroup().addTo(map);
+
+      dibujarParadasEnMapa();
+    }
+
+    function dibujarParadasEnMapa() {
+      capaParadas.clearLayers();
+
+      TODAS_LAS_PARADAS.forEach(p => {
+        const id = p[0];
+        const lat = p[1];
+        const lon = p[2];
+        const desc = p[3] || "Parada oficial";
+
+        const marker = L.circleMarker([lat, lon], {
+          radius: 5,
+          color: '#FAB387',
+          fillColor: '#F9E2AF',
+          fillOpacity: 0.85,
+          weight: 1.5
+        });
+
+        const popupContent = `
+          <div style="min-width: 175px; font-family: sans-serif;">
+            <div class="stop-popup-title">📍 Parada ${id}</div>
+            <div class="stop-popup-desc">${desc}</div>
+            <div style="margin-bottom: 6px;">
+              <button class="btn-query-stop" onclick="consultarArriboEnParada('${id}', '1013', '50A')">⏱️ Ver 50A</button>
+              <button class="btn-query-stop" onclick="consultarArriboEnParada('${id}', '1014', '50B')">⏱️ Ver 50B</button>
+            </div>
+            <div id="res-${id}" class="result-box" style="display:none;"></div>
+          </div>
+        `;
+
+        marker.bindPopup(popupContent);
+        capaParadas.addLayer(marker);
+      });
+    }
+
+    async function consultarArriboEnParada(idParada, codLinea, linea) {
+      const resBox = document.getElementById(`res-${idParada}`);
+      if (!resBox) return;
+
+      resBox.style.display = 'block';
+      resBox.innerHTML = `<em>Consultando arribo para Línea ${linea}...</em>`;
+
+      try {
+        const r = await fetch(`${ENDPOINT_WORKER}parada?id=${idParada}&cod=${codLinea}&linea=${linea}`);
+        const data = await r.json();
+
+        if (!data.arribos || data.arribos.length === 0) {
+          resBox.innerHTML = `Sin arribos próximos de Línea ${linea}.`;
+        } else {
+          let html = '';
+          data.arribos.forEach(a => {
+            const color = a.sentido_code === 'HACIA_PLOTTIER' ? '#2ecc71' : '#e67e22';
+            html += `<div style="margin-bottom:4px;">
+              <strong>Línea ${linea}</strong> (${a.ramal})<br>
+              <span style="color:${color}; font-weight:700;">${a.sentido}</span><br>
+              Arribo: <span style="color:#27ae60; font-weight:bold;">${a.tiempo}</span>
+            </div>`;
+          });
+          resBox.innerHTML = html;
+        }
+      } catch (err) {
+        resBox.innerHTML = `Error al consultar la parada.`;
+      }
+    }
+
+    function toggleParadas() {
+      const btn = document.getElementById('btn-toggle-stops');
+      if (mostrandoParadas) {
+        map.removeLayer(capaParadas);
+        btn.innerText = "📍 Ver Paradas";
+        mostrandoParadas = false;
+      } else {
+        map.addLayer(capaParadas);
+        btn.innerText = "📍 Ocultar Paradas";
+        mostrandoParadas = true;
+      }
     }
 
     function mostrarRuta(linea, sentidoCode) {
@@ -232,7 +395,7 @@ HTML_TEMPLATE = """
         return;
       }
 
-      countLabel.innerText = `🚌 ${buses.length} colectivos en vivo (Radar total)`;
+      countLabel.innerText = `🚌 ${buses.length} colectivos en vivo (50A y 50B)`;
       const idsRecibidos = new Set();
 
       buses.forEach(b => {
@@ -296,21 +459,18 @@ HTML_TEMPLATE = """
         } else {
           cabe.arribos.forEach(c => {
             const tieneGps = (c.lat && c.lon && Math.abs(c.lat) > 1);
-            const ramalUpper = String(c.ramal || "").toUpperCase();
-            const sentidoCode = ramalUpper.includes("VUELTA") ? "HACIA_PLOTTIER" : "HACIA_NEUQUEN";
-            const badgeClass = (sentidoCode === 'HACIA_NEUQUEN') ? 'badge-neuquen' : 'badge-plottier';
-            const badgeIcon = (sentidoCode === 'HACIA_NEUQUEN') ? '🟠' : '🟢';
-            const sentidoTexto = (sentidoCode === 'HACIA_NEUQUEN') ? 'Hacia Neuquén' : 'Hacia Plottier';
+            const badgeClass = (c.sentido_code === 'HACIA_NEUQUEN') ? 'badge-neuquen' : 'badge-plottier';
+            const badgeIcon = (c.sentido_code === 'HACIA_NEUQUEN') ? '🟠' : '🟢';
 
             const botonVer = tieneGps 
-              ? `<button class="btn-action" onclick="centrarEn(${c.lat}, ${c.lon}, '${cabe.linea}', '${sentidoCode}')">Ver en Mapa</button>` 
+              ? `<button class="btn-action" onclick="centrarEn(${c.lat}, ${c.lon}, '${cabe.linea}', '${c.sentido_code}')">Ver en Mapa</button>` 
               : '';
 
             html += `<div class="arrival-row">
               <div>
                 <div class="branch-row">
                   <span class="branch">${c.ramal}</span>
-                  <span class="badge-status ${badgeClass}">${badgeIcon} ${sentidoTexto}</span>
+                  <span class="badge-status ${badgeClass}">${badgeIcon} ${c.sentido}</span>
                 </div>
                 <div class="time-label">Próximo arribo: <span class="time-val">${c.tiempo}</span></div>
                 ${!tieneGps ? '<div class="no-gps-hint">⏳ Salida programada (sin GPS activo)</div>' : ''}
