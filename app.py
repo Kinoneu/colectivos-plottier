@@ -1,16 +1,225 @@
 import os
-from flask import Flask, jsonify, render_template_string
+import re
+import time
+import json
 import requests
+from datetime import datetime, timezone, timedelta
+from threading import Thread
+from flask import Flask, jsonify, render_template_string, request
 
 app = Flask(__name__)
 
-URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
+# Configuración de zona horaria Argentina UTC-3
+TZ_AR = timezone(timedelta(hours=-3))
+
+URL_BASE = "https://cuandollega.smartmovepro.net/indalo/recorridos"
+URL_API = "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribos"
+
+# Paradas clave para rotación en segundo plano (1 cada 3.5s)
+COLA_PARADAS = [
+    # 50A (1013)
+    {"linea": "50A", "cod": "1013", "parada": "NV1014", "cabecera": True},
+    {"linea": "50A", "cod": "1013", "parada": "NV1032", "cabecera": False},
+    {"linea": "50A", "cod": "1013", "parada": "NV1244", "cabecera": True},
+    # 50B (1014)
+    {"linea": "50B", "cod": "1014", "parada": "NV2000", "cabecera": True},
+    {"linea": "50B", "cod": "1014", "parada": "NV1058", "cabecera": False},
+    {"linea": "50B", "cod": "1014", "parada": "NV4159", "cabecera": True},
+    # 50R (1015)
+    {"linea": "50R", "cod": "1015", "parada": "NV5000", "cabecera": True},
+    {"linea": "50R", "cod": "1015", "parada": "NV5028", "cabecera": True},
+    # URBANO (1016)
+    {"linea": "URBANO", "cod": "1016", "parada": "NV1032", "cabecera": True},
+    {"linea": "URBANO", "cod": "1016", "parada": "NV1259", "cabecera": True}
+]
+
+ESTADO_GLOBAL = {
+    "timestamp": "--:--:--",
+    "buses": [],
+    "cabeceras": [],
+    "total_buses": 0,
+    "servicio_activo": True
+}
+
+# Carga de trazas y paradas desde el JSON de IndexedDB si existe en el repo
+RUTAS_GEO = {"50A": {}, "50B": {}, "50R": {}, "URBANO": {}}
+TODAS_LAS_PARADAS = []
+
+def cargar_recorridos_locales():
+    global RUTAS_GEO, TODAS_LAS_PARADAS
+    posibles_archivos = ["recorridos.json", "urbano y r.json", "smartmove_indexeddb_dump.json"]
+    archivo_encontrado = None
+
+    for f in posibles_archivos:
+        ruta = os.path.join(os.path.dirname(__file__), f)
+        if os.path.exists(ruta):
+            archivo_encontrado = ruta
+            break
+
+    if not archivo_encontrado:
+        return
+
+    try:
+        with open(archivo_encontrado, "r", encoding="utf-8") as json_file:
+            data = json.load(json_file)
+
+        recorridos = data.get("DBCuandoLlega", {}).get("recorridos", [])
+        mapa_lineas = {"1013": "50A", "1014": "50B", "1015": "50R", "1016": "URBANO"}
+        paradas_dict = {}
+
+        for rec in recorridos:
+            cod = str(rec.get("codigoLinea"))
+            linea_nom = mapa_lineas.get(cod)
+            if not linea_nom:
+                continue
+
+            bandera = str(rec.get("bandera", "")).upper()
+            sentido = "HACIA_PLOTTIER" if "IDA" in bandera else "HACIA_NEUQUEN"
+
+            puntos = [
+                [round(p["latitud"], 6), round(p["longitud"], 6)]
+                for p in rec.get("puntos", [])
+                if p.get("latitud") and p.get("longitud")
+            ]
+            RUTAS_GEO[linea_nom][sentido] = puntos
+
+            for p in rec.get("paradas", []):
+                p_id = str(p.get("identificador") or "").strip()
+                lat = p.get("latitudParada")
+                lon = p.get("longitudParada")
+                if p_id and lat and lon and p_id not in paradas_dict:
+                    try:
+                        paradas_dict[p_id] = [
+                            p_id,
+                            round(float(str(lat).replace(',', '.')), 6),
+                            round(float(str(lon).replace(',', '.')), 6),
+                            p.get("descripcion") or p_id
+                        ]
+                    except ValueError:
+                        continue
+
+        TODAS_LAS_PARADAS = list(paradas_dict.values())
+    except Exception as e:
+        print(f"Error cargando JSON de recorridos: {e}")
+
+cargar_recorridos_locales()
+
+def esta_en_horario_servicio():
+    ahora = datetime.now(TZ_AR)
+    minutos = ahora.hour * 60 + ahora.minute
+    return (5 * 60 + 30) <= minutos or minutos <= (0 * 60 + 30)
+
+def recolector_segundo_plano():
+    global ESTADO_GLOBAL
+    buses_cache = {}
+    cabeceras_cache = {}
+
+    session = requests.Session()
+    headers_base = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Origin": "https://cuandollega.smartmovepro.net",
+        "Referer": URL_BASE,
+        "X-Requested-With": "XMLHttpRequest"
+    }
+
+    token = None
+
+    while True:
+        if not esta_en_horario_servicio():
+            ESTADO_GLOBAL["servicio_activo"] = False
+            time.sleep(60)
+            continue
+
+        ESTADO_GLOBAL["servicio_activo"] = True
+
+        if not token:
+            try:
+                r_init = session.get(URL_BASE, headers={"User-Agent": headers_base["User-Agent"]}, timeout=10)
+                m = re.search(r'CfDJ8[A-Za-z0-9_\-]{80,}', r_init.text) or re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', r_init.text)
+                token = m.group(1) if m and m.groups() else (m.group(0) if m else None)
+            except Exception:
+                time.sleep(5)
+                continue
+
+        for item in COLA_PARADAS:
+            try:
+                headers = {**headers_base, "RequestVerificationToken": token}
+                payload = {"IdentificadorParada": item["parada"], "CodigoLinea": item["cod"]}
+
+                res = session.post(URL_API, json=payload, headers=headers, timeout=8)
+
+                if res.status_code == 429:
+                    time.sleep(6)
+                    continue
+
+                if res.status_code == 200:
+                    data = res.json()
+                    arribos = data.get("arribos", [])
+
+                    if item["cabecera"] and arribos:
+                        cabeceras_cache[f"{item['linea']}_{item['parada']}"] = {
+                            "linea": item["linea"],
+                            "parada": item["parada"],
+                            "arribos": [
+                                {
+                                    "ramal": a.get("descripcionBandera"),
+                                    "tiempo": a.get("tiempoRestanteArribo"),
+                                    "sentido": "Hacia Neuquén" if "VUELTA" in str(a.get("descripcionBandera", "")).upper() else "Hacia Plottier",
+                                    "sentido_code": "HACIA_NEUQUEN" if "VUELTA" in str(a.get("descripcionBandera", "")).upper() else "HACIA_PLOTTIER",
+                                    "lat": float(str(a["latitud"]).replace(',', '.')) if a.get("latitud") else None,
+                                    "lon": float(str(a["longitud"]).replace(',', '.')) if a.get("longitud") else None
+                                } for a in arribos
+                            ]
+                        }
+
+                    for a in arribos:
+                        if not a.get("latitud") or not a.get("longitud"):
+                            continue
+
+                        lat = float(str(a["latitud"]).replace(',', '.'))
+                        lon = float(str(a["longitud"]).replace(',', '.'))
+                        bandera = str(a.get("descripcionBandera", "")).upper()
+                        sentido = "Hacia Neuquén" if "VUELTA" in bandera else "Hacia Plottier"
+                        sentido_code = "HACIA_NEUQUEN" if "VUELTA" in bandera else "HACIA_PLOTTIER"
+
+                        # ID estable agrupado por proximidad para movimiento suave
+                        id_bus = f"{item['linea']}_{sentido_code}_{round(lat, 2)}_{round(lon, 2)}"
+
+                        buses_cache[id_bus] = {
+                            "id": id_bus,
+                            "linea": item["linea"],
+                            "ramal": a.get("descripcionBandera"),
+                            "sentido": sentido,
+                            "sentido_code": sentido_code,
+                            "tiempo_arribo": a.get("tiempoRestanteArribo"),
+                            "lat": lat,
+                            "lon": lon,
+                            "ultimo_reporte": time.time()
+                        }
+            except Exception:
+                token = None
+
+            time.sleep(3.5)
+
+        # Eliminar unidades sin reporte por más de 4 minutos
+        ahora_ts = time.time()
+        buses_cache = {k: v for k, v in buses_cache.items() if ahora_ts - v["ultimo_reporte"] < 240}
+
+        ESTADO_GLOBAL = {
+            "timestamp": datetime.now(TZ_AR).strftime("%H:%M:%S"),
+            "cabeceras": list(cabeceras_cache.values()),
+            "buses": list(buses_cache.values()),
+            "total_buses": len(buses_cache),
+            "servicio_activo": True
+        }
+
+hilo_poller = Thread(target=recolector_segundo_plano, daemon=True)
+hilo_poller.start()
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-CE85R9NET5"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
@@ -36,7 +245,7 @@ HTML_TEMPLATE = """
     .sub { font-size: 13px; color: #A6ADC8; margin-top: 2px; }
     
     #map-container { position: relative; margin-bottom: 16px; border-radius: 14px; overflow: hidden; border: 1px solid #313244; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
-    #map { height: 350px; width: 100%; background: #11111B; }
+    #map { height: 380px; width: 100%; background: #11111B; }
     
     .map-badge { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(24, 24, 37, 0.9); backdrop-filter: blur(6px); padding: 5px 12px; border-radius: 8px; font-size: 11px; color: #CDD6F4; border: 1px solid #313244; font-weight: 600; }
     .map-controls { position: absolute; bottom: 10px; right: 10px; z-index: 1000; display: flex; gap: 6px; }
@@ -46,8 +255,10 @@ HTML_TEMPLATE = """
     .card { background: #1E1E2E; border: 1px solid #313244; border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
     .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
     .line-tag { background: #313244; font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
-    .line-50b { color: #89B4FA; }
     .line-50a { color: #A6E3A1; }
+    .line-50b { color: #89B4FA; }
+    .line-50r { color: #CBA6F7; }
+    .line-urbano { color: #F9E2AF; }
     .stop-tag { font-size: 12px; color: #6C7086; }
     
     .arrival-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-top: 1px solid #2A2B3D; }
@@ -78,12 +289,14 @@ HTML_TEMPLATE = """
     .status-text { font-size: 12px; color: #A6ADC8; font-weight: 500; }
     .cached-hint { font-size: 10px; color: #A6E3A1; }
 
-    .leaflet-marker-icon { transition: transform 1.2s ease-in-out; cursor: pointer; }
-    .bus-marker { display: flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 8px; font-size: 11px; font-weight: 800; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.6); }
-    .bus-marker-50b { background-color: #1E2D42; border: 2px solid #89B4FA; color: #89B4FA; }
+    /* Animación fluida de posición estilo Uber */
+    .leaflet-marker-icon { transition: transform 1.5s cubic-bezier(0.25, 1, 0.5, 1); cursor: pointer; }
+    .bus-marker { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 8px; font-size: 11px; font-weight: 800; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.6); }
     .bus-marker-50a { background-color: #1E3A24; border: 2px solid #A6E3A1; color: #A6E3A1; }
+    .bus-marker-50b { background-color: #1E2D42; border: 2px solid #89B4FA; color: #89B4FA; }
+    .bus-marker-50r { background-color: #2F1E3A; border: 2px solid #CBA6F7; color: #CBA6F7; }
+    .bus-marker-urbano { background-color: #3A321E; border: 2px solid #F9E2AF; color: #F9E2AF; }
 
-    /* Estilos del popup de paradas */
     .stop-popup-title { font-size: 13px; font-weight: 800; color: #111; margin-bottom: 2px; }
     .stop-popup-desc { font-size: 11px; color: #555; margin-bottom: 8px; }
     .btn-query-stop { background: #1E1E2E; color: #CDD6F4; border: 1px solid #45475A; padding: 5px 9px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; margin-right: 4px; margin-top: 4px; }
@@ -93,7 +306,7 @@ HTML_TEMPLATE = """
 <body>
   <header>
     <h1>Transporte Plottier</h1>
-    <p class="sub">GPS y paradas en tiempo real (50A y 50B)</p>
+    <p class="sub">GPS y paradas en tiempo real (50A, 50B, 50R y Urbano)</p>
   </header>
 
   <div id="map-container">
@@ -117,111 +330,18 @@ HTML_TEMPLATE = """
     <button id="btn" class="btn-refresh" onclick="pedirDatos()">Actualizar</button>
     <div class="status-box">
       <div id="status" class="status-text">Iniciando...</div>
-      <div id="hint" class="cached-hint">Conexión directa activa</div>
+      <div id="hint" class="cached-hint">Conexión interna activa</div>
     </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
-    const ENDPOINT_WORKER = "https://radar-colectivos.gorolol.workers.dev/";
+    const ENDPOINT_LOCAL = "/api/arribos";
 
-    const TODAS_LAS_PARADAS = [
-      ["NV1008", -38.959017, -68.106748, "Ruta 22 / Acceso Este"],
-      ["NV1010", -38.958888, -68.117712, "Ruta 22 y Bejarano"],
-      ["NV1025", -38.957974, -68.141026, "Ruta 22 y Saavedra"],
-      ["NV1143", -38.957799, -68.155489, "Ruta 22 y Solalique"],
-      ["NV1029", -38.955654, -68.192332, "Ruta 22 y Río Colorado"],
-      ["NV1027", -38.956455, -68.167527, "Ruta 22 y Crouzeilles"],
-      ["NV1012", -38.956568, -68.167666, "Ruta 22 / Terminal Nqn"],
-      ["NV1013", -38.955613, -68.178095, "Ruta 22 y Gatica"],
-      ["NV1028", -38.955880, -68.185664, "Ruta 22 / Mayor Buratovich"],
-      ["NV1030", -38.955804, -68.196961, "Ruta 22 / La Herradura"],
-      ["NV1031", -38.955563, -68.208768, "Ruta 22 y Constituyentes"],
-      ["NV1032", -38.955388, -68.218424, "Ruta 22 / Acceso Plottier"],
-      ["NV1026", -38.957840, -68.155897, "Ruta 22 / Aeropuerto"],
-      ["NV1011", -38.957999, -68.139772, "Ruta 22 y O'Connor"],
-      ["NV1009", -38.958909, -68.117123, "Ruta 22 y Anaya"],
-      ["NV1014", -38.946381, -68.057601, "Cabecera Neuquén (Mitre)"],
-      ["NV1015", -38.949342, -68.057693, "Sarmiento y San Luis"],
-      ["NV1016", -38.950777, -68.056394, "Láinez y Alcorta"],
-      ["NV1017", -38.950693, -68.053841, "Perito Moreno y Misiones"],
-      ["NV1018", -38.951683, -68.052191, "Bahía Blanca"],
-      ["NV1019", -38.955511, -68.052243, "Ruta 22 y Tierra del Fuego"],
-      ["NV1021", -38.957124, -68.060420, "Ruta 22 y La Pampa"],
-      ["NV1023", -38.957960, -68.147140, "Ruta 22 y El Cholar"],
-      ["NV1024", -38.955619, -68.195944, "Ruta 22 y Futaleufú"],
-      ["NV1034", -38.958992, -68.248224, "San Martín y Candolle"],
-      ["NV1116", -38.959502, -68.088995, "Ruta 22 y Leguizamón"],
-      ["NV1117", -38.959225, -68.095626, "Ruta 22 y Gatica"],
-      ["NV1050", -38.960227, -68.231994, "San Martín y Martellotta"],
-      ["NV1035", -38.964104, -68.239780, "Belgrano y Zabaleta"],
-      ["NV1038", -38.964520, -68.243109, "Belgrano y Libertad"],
-      ["NV1039", -38.962051, -68.243420, "Batilana y Perito Moreno"],
-      ["NV1040", -38.960381, -68.244661, "San Martín y Chivilcoy"],
-      ["NV1041", -38.960362, -68.227848, "San Martín y Río Colorado"],
-      ["NV1042", -38.960357, -68.229405, "San Martín y Percy Clark"],
-      ["NV1043", -38.960336, -68.233364, "San Martín y Bachmann"],
-      ["NV1044", -38.960239, -68.236177, "San Martín y Buratovich"],
-      ["NV1046", -38.961257, -68.238108, "Belgrano y Constituyentes"],
-      ["NV1047", -38.963159, -68.238079, "Belgrano y Güemes"],
-      ["NV1048", -38.963915, -68.238462, "Belgrano y San Carlos"],
-      ["NV1049", -38.964228, -68.240999, "Belgrano y Santa Cruz"],
-      ["NV1051", -38.960069, -68.247066, "San Martín y Maestros Neuquinos"],
-      ["NV1052", -38.959130, -68.249539, "San Martín y Posta de Halada"],
-      ["NV1058", -38.958794, -68.124248, "Ruta 22 / Intermedia San Martín"],
-      ["NV1059", -38.958877, -68.118315, "Ruta 22 y Drury"],
-      ["NV1060", -38.958078, -68.134464, "Ruta 22 y Álvarez"],
-      ["NV1062", -38.955871, -68.198951, "Ruta 22 y Fotheringham"],
-      ["NV1063", -38.955454, -68.211289, "Ruta 22 y Roca"],
-      ["NV1066", -38.956680, -68.226224, "Ruta 22 y Godoy"],
-      ["NV1069", -38.957731, -68.226288, "Ruta 22 y Pellegrini"],
-      ["NV1070", -38.957718, -68.159731, "Ruta 22 y Casimiro Gómez"],
-      ["NV1071", -38.955713, -68.175137, "Ruta 22 y Chaco"],
-      ["NV1136", -38.959289, -68.085507, "Ruta 22 y Jujuy"],
-      ["NV2021", -38.959249, -68.090370, "Ruta 22 y Laínez"],
-      ["NV6043", -38.959504, -68.089109, "Ruta 22 y Misiones"],
-      ["AXION", -38.959108, -68.070216, "Mosconi y Chubut"],
-      ["GATICA 299", -38.959279, -68.073504, "Mosconi y Gatica"],
-      ["RIVAS299", -38.959302, -68.079020, "Mosconi y Rivas"],
-      ["NV1194", -38.950315, -68.175466, "San Martín y Gatica"],
-      ["NV1195", -38.946710, -68.180058, "San Martín y Saavedra"],
-      ["NV1201", -38.949172, -68.187418, "San Martín y Bejarano"],
-      ["NV1202", -38.947912, -68.187633, "San Martín y Solalique"],
-      ["NV1204", -38.946477, -68.187665, "San Martín y Crouzeilles"],
-      ["NV1205", -38.944908, -68.187633, "San Martín / Aeropuerto Norte"],
-      ["NV1160", -38.944516, -68.215055, "Belgrano y Constituyentes"],
-      ["NV1150", -38.944657, -68.197331, "San Martín y Futaleufú"],
-      ["NV1244", -38.930301, -68.252027, "Barrio 108 Viviendas"],
-      ["NV1259", -38.953457, -68.237667, "Constituyentes y Perito Moreno"],
-      ["NV2000", -38.960410, -68.246800, "Cabecera Plottier (50B)"]
-    ];
-
-    function mercatorALatLon(x, y) {
-      const lon = (x / 20037508.34) * 180;
-      let lat = (y / 20037508.34) * 180;
-      lat = 180 / Math.PI * (2 * Math.atan(Math.exp(lat * Math.PI / 180)) - Math.PI / 2);
-      return [lat, lon];
-    }
-
-    const TRAZAS_RAW = {
-      "50B": {
-        "HACIA_PLOTTIER": [[-7576123.127717475,-4713953.225682237],[-7576127.135219142,-4713960.668571745],[-7576140.270919057,-4714625.541017488],[-7575523.672259552,-4714622.5350375585],[-7575533.913652705,-4715537.968661558],[-7578334.266763101,-4715525.657356469],[-7578412.190406656,-4715517.9270097455],[-7578498.129053549,-4715523.939501133],[-7578494.566829843,-4715600.956967883],[-7579108.493821568,-4715589.933986044],[-7579115.72958847,-4715842.177166955],[-7583422.0127703175,-4715796.366361502],[-7583523.090867958,-4715778.757888199],[-7583546.913238986,-4715779.473679201],[-7583639.5310553275,-4715757.141023744],[-7583717.454698882,-4715733.949472043],[-7583945.325696536,-4715679.120273622],[-7584124.772715694,-4715657.360465009],[-7584513.611697037,-4715650.345799814],[-7584585.078810125,-4715654.067866457],[-7584684.821073875,-4715642.042732994],[-7586734.21289938,-4715629.015521161],[-7586895.51484154,-4715621.7145636035],[-7587297.155564321,-4715619.280912253],[-7588442.187846622,-4715419.723488214],[-7588664.270230753,-4715194.25981618],[-7590284.970697214,-4713564.914808015],[-7590591.87853333,-4714429.581617774],[-7590632.510147468,-4714417.701074614],[-7590624.4951441325,-4713756.849877528],[-7594854.635794276,-4713713.624809864],[-7594851.518848535,-4712383.6136334315],[-7596173.103843232,-4712371.878595528],[-7596505.837801212,-4712371.306155002],[-7596507.062315612,-4712007.097415341],[-7596821.09459914,-4712010.675040777],[-7596824.768142336,-4711714.451925238],[-7597492.351128625,-4711704.291768824],[-7597495.690713347,-4711684.114586941],[-7597586.861376307,-4711683.685285635],[-7597684.154611261,-4711690.840309779],[-7597727.45789318,-4711685.545591426],[-7597782.672360612,-4711685.259390514],[-7597844.788636475,-4711680.966377784],[-7597998.52085326,-4711678.390571015],[-7598051.731569858,-4711679.249173199],[-7598168.394396211,-4711676.244065874],[-7598169.618910611,-4711685.545591426],[-7598514.820651559,-4711685.974892813],[-7598512.816900725,-4712308.0516757555],[-7598463.279727323,-4712301.611762196],[-7598446.470484212,-4712292.166563034],[-7598173.626412278,-4712256.103156181],[-7598125.425072765,-4712247.65975801],[-7598058.85601727,-4712240.361233048],[-7597865.271422781,-4712214.744883052],[-7597575.506788245,-4712170.810846718],[-7597547.676915548,-4712165.9451996675],[-7597528.752602113,-4712163.798591416],[-7597513.947109837,-4712164.943449095],[-7597508.492454789,-4712161.938197968],[-7597509.049052242,-4712127.8787473785],[-7597488.900224409,-4712119.864775614],[-7597477.5456363475,-4712111.850810179],[-7597471.200425373,-4712047.309997799],[-7596829.220921968,-4712055.46701795],[-7596829.220921968,-4712382.75497166],[-7596173.437801706,-4712373.16658683],[-7596170.654814434,-4713035.3588711675],[-7595380.954346748,-4713041.083652457],[-7595378.505317951,-4713714.054197047],[-7594863.763992522,-4713715.342358708],[-7594864.097950994,-4714610.94055188],[-7595153.1946685845,-4714615.807371415],[-7595602.257494444,-4714856.431565999],[-7595629.085491726,-4714867.740041546],[-7595630.866603578,-4714928.720139591],[-7595924.750059273,-4714929.292724408],[-7596190.469683797,-4714997.287401224],[-7596213.178859917,-4715768.307345327],[-7596826.437934698,-4715759.288392326],[-7596826.437934698,-4715656.644682625],[-7597004.326480986,-4715716.341107085],[-7597005.550995384,-4715740.248406765],[-7597262.2537411535,-4715780.332628469]],
-        "HACIA_NEUQUEN": [[-7597262.2537411535,-4715780.332628469],[-7597261.585824208,-4715793.78950984],[-7597226.854143082,-4716016.403276067],[-7597064.327686524,-4715986.482556415],[-7596989.4096692195,-4715979.467663623],[-7596961.802435502,-4715989.202618192],[-7596826.66057368,-4715988.773134706],[-7596820.649321177,-4716600.519214987],[-7596475.558899717,-4716534.374985973],[-7596227.093796266,-4716495.71946742],[-7596221.97309969,-4716454.200741217],[-7596218.633514967,-4716119.909604224],[-7596222.084419181,-4715995.358550169],[-7594918.31054301,-4715996.933324063],[-7594907.623871894,-4715503.468414098],[-7594600.827355268,-4715459.233828643],[-7594473.700496783,-4715407.8417855],[-7594294.253477624,-4715367.759035632],[-7594121.374308422,-4715348.004024316],[-7593282.804584275,-4715345.999894883],[-7593272.340552142,-4715328.678506993],[-7588935.667149306,-4715362.032941436],[-7588411.018389199,-4715449.356229109],[-7587310.959181179,-4715648.771079722],[-7584045.624557742,-4715682.126566638],[-7583538.452957686,-4715799.945323227],[-7580364.734275171,-4715848.762487246],[-7580187.402326336,-4715861.64682192],[-7580145.65751729,-4715862.362618769],[-7580125.286050473,-4715872.240620467],[-7579728.988663251,-4715861.074184476],[-7579426.756245745,-4715880.1143968245],[-7579110.608891894,-4715874.388013413],[-7579107.046668188,-4715591.079230352],[-7578495.012107806,-4715600.098033803],[-7578493.787593408,-4715677.688705831],[-7577255.692216804,-4715681.840252981],[-7577108.193891504,-4715689.284410742],[-7576301.684180708,-4715700.021186369],[-7576299.3464714,-4715234.198730027],[-7575988.765092087,-4715237.920643987],[-7575978.078420971,-4713612.4330702275],[-7576128.916330996,-4713616.011261632],[-7576123.127717475,-4713953.225682237]]
-      },
-      "50A": {
-        "HACIA_PLOTTIER": [[-7576123.127717475,-4713953.225682237],[-7576126.801260672,-4713962.24302984],[-7576139.269043639,-4714629.119566186],[-7575523.672259552,-4714622.248753801],[-7575532.243860344,-4715533.817173289],[-7576644.770851331,-4715532.09931657],[-7576650.893423325,-4715841.890848778],[-7577570.503736769,-4715836.450804959],[-7577572.618807093,-4715854.775174725],[-7583421.567492354,-4715798.943213817],[-7583560.828175335,-4715775.751566543],[-7583874.860458863,-4715693.006491674],[-7583955.121811725,-4715674.968727586],[-7584108.9653480025,-4715654.497335772],[-7584605.895554903,-4715650.202643431],[-7584680.479613734,-4715639.609076765],[-7587213.443307246,-4715620.139847957],[-7587287.6934076045,-4715615.98832606],[-7587825.1439091535,-4715524.941583376],[-7587911.973111974,-4715501.464253952],[-7588335.989052405,-4715432.607277967],[-7588433.282287358,-4715422.8728575315],[-7588473.2459845515,-4715410.847998125],[-7588863.4207997825,-4715348.719784924],[-7588928.320062916,-4715342.134789236],[-7589020.158642819,-4715337.553925193],[-7589548.258307143,-4715331.3983923895],[-7589632.638481165,-4715333.688822764],[-7590323.70988001,-4715321.807220816],[-7590518.518988898,-4715328.964810683],[-7591577.835263286,-4715320.089399999],[-7591637.613829843,-4715316.796910914],[-7593305.179801925,-4715308.350965536],[-7593380.877055665,-4715311.929755093],[-7594183.935862247,-4715296.898847442],[-7594201.413022301,-4715297.041998837],[-7594240.597483061,-4715293.320063189],[-7594253.176585521,-4715294.322122653],[-7594704.6884401785,-4715455.082372595],[-7594728.6221306985,-4715460.235904495],[-7594785.729029476,-4715461.524287879],[-7594910.963456619,-4715483.999446573],[-7594907.623871894,-4715503.468414098],[-7594908.40310833,-4715525.084737992],[-7594910.852137129,-4715545.985333369],[-7594911.742693054,-4715715.195848635],[-7594915.8615142135,-4715756.997865855],[-7594920.870891299,-4715997.07648534],[-7594941.242358114,-4715995.501711421],[-7596194.922463427,-4715989.202618192],[-7596224.422128488,-4715996.074356453],[-7596222.195738672,-4716125.492963153],[-7596224.978725942,-4716307.168549865],[-7596222.752336126,-4716466.083669633],[-7596229.542825065,-4716492.999269811],[-7596813.413554275,-4716592.501709711],[-7596817.643694925,-4716592.215370353],[-7596825.770017753,-4715985.480428577],[-7596942.3215246145,-4715989.345779359],[-7596959.576045686,-4715989.202618192],[-7596967.591049024,-4715980.040307751],[-7596987.851196348,-4715976.747604458],[-7597026.145101181,-4715979.038180549],[-7597225.518309192,-4716011.535784564],[-7597259.582073375,-4715789.065283496],[-7597261.140546246,-4715786.917908611]],
-        "HACIA_NEUQUEN": [[-7597250.119916658,-4715779.759995615],[-7597007.220787747,-4715742.538929453],[-7597004.103842004,-4715719.920040578],[-7596845.584887113,-4715664.947761397],[-7596828.553005023,-4715661.798316925],[-7596830.111477895,-4715759.002076489],[-7596504.168008851,-4715759.002076489],[-7596297.113755976,-4715770.884190514],[-7596210.395872649,-4715769.738925908],[-7596208.948719267,-4715766.875764949],[-7596206.611009962,-4715726.362124044],[-7596207.056287925,-4715632.451267713],[-7596197.705450697,-4715475.410208072],[-7596190.803642267,-4715001.009228269],[-7596188.688571943,-4714998.862020193],[-7595976.06834453,-4714941.603305795],[-7595930.761311775,-4714931.153625288],[-7595916.289777972,-4714929.722163043],[-7595639.772162842,-4714928.720139591],[-7595630.866603578,-4714922.135416516],[-7595635.3193832105,-4714889.35501089],[-7595631.9797984855,-4714870.602948748],[-7595618.064862136,-4714861.298503298],[-7595474.462719014,-4714812.915524512],[-7595452.421459837,-4714803.897420843],[-7595426.372698991,-4714789.439842796],[-7595328.745505566,-4714729.462585574],[-7595255.6086001145,-4714677.7879537875],[-7595245.36720696,-4714667.767972549],[-7595192.04517087,-4714632.984400197],[-7595172.564259982,-4714622.391895678],[-7595141.283483069,-4714613.230819607],[-7595096.755686752,-4714609.938559915],[-7594860.090449327,-4714611.226835318],[-7594858.865934927,-4714425.573722142],[-7594861.203644233,-4714366.600583722],[-7594859.867810343,-4713727.508338012],[-7594861.426283215,-4713711.764132275],[-7594881.797750031,-4713708.901552039],[-7595029.073436349,-4713712.193519382],[-7595138.945773764,-4713710.046584037],[-7595198.167742864,-4713705.8958436595],[-7595380.843027256,-4713707.470262223],[-7595379.061915404,-4713042.944207072],[-7595412.903040605,-4713040.797413317],[-7596165.088839895,-4713036.074468653],[-7596175.218913556,-4713035.6451101545],[-7596171.656689852,-4712581.966448992],[-7596175.441552539,-4712540.893072966],[-7596172.881204251,-4712379.320325308],[-7596175.107594066,-4712373.452807142],[-7596197.482811715,-4712371.592375263],[-7596824.545503356,-4712377.889223004],[-7596822.541752521,-4712057.756708993],[-7596881.095804678,-4712054.608383941],[-7597470.75514741,-4712047.309997799],[-7597479.660706673,-4712111.850810179],[-7597506.600023445,-4712129.166707716],[-7597508.381135297,-4712165.9451996675],[-7597617.028958312,-4712176.678247733],[-7598443.798816433,-4712290.449255041],[-7598466.507992555,-4712302.470417102],[-7598512.14898378,-4712306.191255862],[-7598514.709332068,-4711685.11629006],[-7598174.071690242,-4711687.4058975605],[-7598167.8377987575,-4711688.24747066],[-7598050.173096989,-4711681.681879779],[-7598003.752869328,-4711673.382059729],[-7597996.628421916,-4711680.250875837],[-7597786.123264827,-4711683.11288392],[-7597676.250927414,-4711692.700616881],[-7597591.202836447,-4711686.976596114],[-7597495.802032838,-4711686.976596114],[-7597490.681336261,-4711704.577970274],[-7597171.528356157,-4711708.727892203],[-7597137.909869937,-4711711.160605849],[-7596828.886963496,-4711713.593320077],[-7596821.985155067,-4711712.73471499],[-7596823.209669465,-4712007.526730327],[-7596508.06419103,-4712008.099150336],[-7596506.839676631,-4712376.028790309],[-7596181.11884657,-4712375.456349549],[-7596140.153273959,-4712379.320325308],[-7594850.628292607,-4712383.041192242],[-7594857.1961425645,-4712652.664565672],[-7594854.301835804,-4712803.221710374],[-7594862.09420016,-4713066.272728497],[-7594856.52822562,-4713349.654142329],[-7594859.867810343,-4713652.652014227],[-7594857.864059509,-4713715.485487791],[-7594743.650261955,-4713720.495006986],[-7594475.815567107,-4713722.785073727],[-7594427.614227593,-4713725.9339163415],[-7593642.366539538,-4713726.649562525],[-7593624.5554210115,-4713727.365208761],[-7593504.775648918,-4713719.922490382],[-7590854.25857313,-4713736.954873182],[-7590688.83780981,-4713749.407137522],[-7590621.266878899,-4713750.55217409],[-7590628.057367837,-4714427.434530633],[-7590588.427629116,-4714428.8659220105],[-7590470.428968875,-4714075.60465476],[-7590274.840623551,-4713565.201061941],[-7589298.012091841,-4714546.383843045],[-7589235.339218523,-4714600.92063666],[-7589116.338682866,-4714738.194336053],[-7588664.270230753,-4715194.25981618],[-7588577.774986408,-4715295.037879472],[-7588495.509882711,-4715372.196760856],[-7588405.118456188,-4715449.069922021],[-7587364.949134214,-4715630.590238186],[-7587261.533327267,-4715639.609076765],[-7585866.366149155,-4715643.044826904],[-7584155.385575662,-4715668.669833398],[-7583959.240632885,-4715693.435962638],[-7583560.048938901,-4715785.056850747],[-7583538.452957686,-4715799.945323227],[-7580226.475467606,-4715852.0551489955],[-7580186.51177041,-4715861.64682192],[-7580147.438629141,-4715861.64682192],[-7580123.282299641,-4715871.811141933],[-7579722.754771766,-4715863.078415671],[-7579662.419607755,-4715869.520590055],[-7579114.39375458,-4715874.388013413],[-7579106.935348698,-4715591.508697],[-7578491.561203592,-4715601.10012357],[-7578492.897037482,-4715678.977116833],[-7576303.242653578,-4715692.004392827],[-7576297.231401076,-4715693.292805648],[-7576297.342720565,-4715231.19256975],[-7576244.799920911,-4715237.204891196],[-7576147.72932494,-4715244.219270719],[-7575989.433009031,-4715241.499408697],[-7575987.87453616,-4715235.9165362995],[-7575991.548079357,-4715061.990127367],[-7575984.757590419,-4714937.595207889],[-7575987.095299726,-4714799.316799827],[-7575985.759465835,-4714749.932110833],[-7575975.963350645,-4714629.548992114],[-7575981.195366712,-4714455.9192570355],[-7575977.187865044,-4714218.453556359],[-7575975.963350645,-4714202.136045013],[-7575973.291682867,-4713941.345696835],[-7575971.176612541,-4713898.97863323],[-7575975.963350645,-4713611.00179402],[-7576126.022024234,-4713610.429283593],[-7576127.580497106,-4713825.266089471],[-7576125.910704744,-4713913.005546861],[-7576123.127717475,-4713953.225682237]]
-      }
-    };
-
-    const RUTAS_GEO = {};
-    for (let l in TRAZAS_RAW) {
-      RUTAS_GEO[l] = {};
-      for (let s in TRAZAS_RAW[l]) {
-        RUTAS_GEO[l][s] = TRAZAS_RAW[l][s].map(p => mercatorALatLon(p[0], p[1]));
-      }
-    }
+    // Inyectado directamente por Flask desde la base de datos de SmartMovePro
+    const RUTAS_GEO = {{ rutas_geo|safe }};
+    const TODAS_LAS_PARADAS = {{ paradas|safe }};
 
     let map;
     let capaRuta = null;
@@ -231,7 +351,7 @@ HTML_TEMPLATE = """
     let cooldownTimer = null;
 
     function initMap() {
-      map = L.map('map', { zoomControl: false }).setView([-38.955, -68.16], 12);
+      map = L.map('map', { zoomControl: false }).setView([-38.955, -68.20], 12);
       L.control.zoom({ position: 'topright' }).addTo(map);
 
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -255,7 +375,7 @@ HTML_TEMPLATE = """
         const desc = p[3] || "Parada oficial";
 
         const marker = L.circleMarker([lat, lon], {
-          radius: 5,
+          radius: 4.5,
           color: '#FAB387',
           fillColor: '#F9E2AF',
           fillOpacity: 0.85,
@@ -267,8 +387,10 @@ HTML_TEMPLATE = """
             <div class="stop-popup-title">📍 Parada ${id}</div>
             <div class="stop-popup-desc">${desc}</div>
             <div style="margin-bottom: 6px;">
-              <button class="btn-query-stop" onclick="consultarArriboEnParada('${id}', '1013', '50A')">⏱️ Ver 50A</button>
-              <button class="btn-query-stop" onclick="consultarArriboEnParada('${id}', '1014', '50B')">⏱️ Ver 50B</button>
+              <button class="btn-query-stop" onclick="consultarArriboEnParada('${id}', '1013', '50A')">50A</button>
+              <button class="btn-query-stop" onclick="consultarArriboEnParada('${id}', '1014', '50B')">50B</button>
+              <button class="btn-query-stop" onclick="consultarArriboEnParada('${id}', '1015', '50R')">50R</button>
+              <button class="btn-query-stop" onclick="consultarArriboEnParada('${id}', '1016', 'URB')">Urb</button>
             </div>
             <div id="res-${id}" class="result-box" style="display:none;"></div>
           </div>
@@ -287,7 +409,7 @@ HTML_TEMPLATE = """
       resBox.innerHTML = `<em>Consultando arribo para Línea ${linea}...</em>`;
 
       try {
-        const r = await fetch(`${ENDPOINT_WORKER}parada?id=${idParada}&cod=${codLinea}&linea=${linea}`);
+        const r = await fetch(`/api/parada?id=${idParada}&cod=${codLinea}&linea=${linea}`);
         const data = await r.json();
 
         if (!data.arribos || data.arribos.length === 0) {
@@ -324,19 +446,24 @@ HTML_TEMPLATE = """
 
     function mostrarRuta(linea, sentidoCode) {
       capaRuta.clearLayers();
-      if (!RUTAS_GEO[linea]) return;
+      const l = linea.toUpperCase();
+      if (!RUTAS_GEO[l]) return;
 
       const sentidoActivo = sentidoCode || "HACIA_NEUQUEN";
       const sentidoSecundario = (sentidoActivo === "HACIA_NEUQUEN") ? "HACIA_PLOTTIER" : "HACIA_NEUQUEN";
 
-      const colorBase = (linea === "50A") ? "#2ECC71" : "#3B82F6";
-      const colorSec = (linea === "50A") ? "#16A085" : "#1D4ED8";
+      let colorBase = "#89B4FA";
+      let colorSec = "#1D4ED8";
 
-      if (RUTAS_GEO[linea][sentidoSecundario]) {
-        capaRuta.addLayer(L.polyline(RUTAS_GEO[linea][sentidoSecundario], { color: colorSec, weight: 3.5, opacity: 0.6, lineJoin: 'round' }));
+      if (l === "50A") { colorBase = "#A6E3A1"; colorSec = "#16A085"; }
+      else if (l === "50R") { colorBase = "#CBA6F7"; colorSec = "#8839EF"; }
+      else if (l.includes("URB")) { colorBase = "#F9E2AF"; colorSec = "#DF8E1D"; }
+
+      if (RUTAS_GEO[l][sentidoSecundario] && RUTAS_GEO[l][sentidoSecundario].length > 0) {
+        capaRuta.addLayer(L.polyline(RUTAS_GEO[l][sentidoSecundario], { color: colorSec, weight: 3.5, opacity: 0.55, lineJoin: 'round' }));
       }
-      if (RUTAS_GEO[linea][sentidoActivo]) {
-        capaRuta.addLayer(L.polyline(RUTAS_GEO[linea][sentidoActivo], { color: colorBase, weight: 6, opacity: 0.95, lineJoin: 'round' }));
+      if (RUTAS_GEO[l][sentidoActivo] && RUTAS_GEO[l][sentidoActivo].length > 0) {
+        capaRuta.addLayer(L.polyline(RUTAS_GEO[l][sentidoActivo], { color: colorBase, weight: 6, opacity: 0.95, lineJoin: 'round' }));
       }
       document.getElementById('btn-clear').style.display = 'block';
     }
@@ -373,38 +500,44 @@ HTML_TEMPLATE = """
     async function pedirDatos() {
       const status = document.getElementById('status');
       try {
-        const res = await fetch(ENDPOINT_WORKER);
+        const res = await fetch(ENDPOINT_LOCAL);
         const data = await res.json();
         
-        if (!data || data.error) throw new Error(data.error);
+        if (!data) throw new Error("Sin respuesta del servidor");
 
         renderTarjetas(data.cabeceras);
         actualizarMapa(data.buses);
 
         status.innerText = "Actualizado: " + data.timestamp;
-        iniciarCooldown(5);
+        iniciarCooldown(3);
       } catch (err) {
-        status.innerText = "Reintentando sincronización...";
+        status.innerText = "Sincronizando con el servidor...";
       }
     }
 
     function actualizarMapa(buses) {
       const countLabel = document.getElementById('bus-count');
       if (!buses || buses.length === 0) {
-        countLabel.innerText = "Sin unidades reportando con GPS";
+        countLabel.innerText = "Sin unidades reportando en este momento";
         return;
       }
 
-      countLabel.innerText = `🚌 ${buses.length} colectivos en vivo (50A y 50B)`;
+      countLabel.innerText = `🚌 ${buses.length} colectivos en vivo`;
       const idsRecibidos = new Set();
 
       buses.forEach(b => {
         if (!b.lat || !b.lon || isNaN(b.lat) || isNaN(b.lon)) return;
 
         idsRecibidos.add(b.id);
-        const claseCss = (b.linea === "50A") ? "bus-marker-50a" : "bus-marker-50b";
+        const lUpper = (b.linea || "").toUpperCase();
+
+        let claseCss = "bus-marker-50b";
+        if (lUpper === "50A") claseCss = "bus-marker-50a";
+        else if (lUpper === "50R") claseCss = "bus-marker-50r";
+        else if (lUpper.includes("URB")) claseCss = "bus-marker-urbano";
+
         const iconoHtml = `<div class="bus-marker ${claseCss}">🚌 ${b.linea}</div>`;
-        const icon = L.divIcon({ className: 'custom-icon', html: iconoHtml, iconSize: [58, 24], iconAnchor: [29, 12] });
+        const icon = L.divIcon({ className: 'custom-icon', html: iconoHtml, iconSize: [60, 24], iconAnchor: [30, 12] });
 
         const sentidoTexto = (b.sentido_code === 'HACIA_NEUQUEN') ? '🟠 Hacia Neuquén' : '🟢 Hacia Plottier';
         const estadoColor = (b.sentido_code === 'HACIA_NEUQUEN') ? '#FAB387' : '#A6E3A1';
@@ -447,7 +580,12 @@ HTML_TEMPLATE = """
       let html = '';
 
       cabeceras.forEach(cabe => {
-        const tagClase = (cabe.linea === "50A") ? "line-50a" : "line-50b";
+        const lUpper = (cabe.linea || "").toUpperCase();
+        let tagClase = "line-50b";
+        if (lUpper === "50A") tagClase = "line-50a";
+        else if (lUpper === "50R") tagClase = "line-50r";
+        else if (lUpper.includes("URB")) tagClase = "line-urbano";
+
         html += `<div class="card">
           <div class="card-header">
             <span class="line-tag ${tagClase}">Línea ${cabe.linea}</span>
@@ -487,7 +625,7 @@ HTML_TEMPLATE = """
 
     initMap();
     pedirDatos();
-    setInterval(pedirDatos, 25000);
+    setInterval(pedirDatos, 12000);
   </script>
 </body>
 </html>
@@ -499,7 +637,11 @@ def ping():
 
 @app.route('/')
 def home():
-    return render_template_string(HTML_TEMPLATE)
+    return render_template_string(
+        HTML_TEMPLATE,
+        rutas_geo=json.dumps(RUTAS_GEO),
+        paradas=json.dumps(TODAS_LAS_PARADAS)
+    )
 
 @app.route('/manifest.json')
 def manifest():
@@ -519,11 +661,46 @@ def manifest():
 
 @app.route('/api/arribos')
 def api_arribos():
+    return jsonify(ESTADO_GLOBAL), 200
+
+@app.route('/api/parada')
+def api_parada():
+    p_id = request.args.get("id")
+    p_cod = request.args.get("cod", "1013")
+    p_linea = request.args.get("linea", "50A")
+
+    if not p_id:
+        return jsonify({"arribos": []}), 200
+
     try:
-        r = requests.get(URL_WORKER, timeout=8)
-        return jsonify(r.json()), r.status_code
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        s = requests.Session()
+        r_init = s.get(URL_BASE, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        m = re.search(r'CfDJ8[A-Za-z0-9_\-]{80,}', r_init.text) or re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', r_init.text)
+        token = m.group(1) if m and m.groups() else (m.group(0) if m else None)
+
+        res = s.post(URL_API, json={"IdentificadorParada": p_id, "CodigoLinea": p_cod}, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Origin": "https://cuandollega.smartmovepro.net",
+            "Referer": URL_BASE,
+            "RequestVerificationToken": token,
+            "X-Requested-With": "XMLHttpRequest"
+        }, timeout=6)
+
+        if res.status_code == 200:
+            data = res.json()
+            arribos = [
+                {
+                    "ramal": a.get("descripcionBandera"),
+                    "tiempo": a.get("tiempoRestanteArribo"),
+                    "sentido": "Hacia Neuquén" if "VUELTA" in str(a.get("descripcionBandera", "")).upper() else "Hacia Plottier",
+                    "sentido_code": "HACIA_NEUQUEN" if "VUELTA" in str(a.get("descripcionBandera", "")).upper() else "HACIA_PLOTTIER"
+                } for a in data.get("arribos", [])
+            ]
+            return jsonify({"parada": p_id, "linea": p_linea, "arribos": arribos}), 200
+    except Exception:
+        pass
+
+    return jsonify({"parada": p_id, "linea": p_linea, "arribos": []}), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
