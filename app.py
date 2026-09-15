@@ -10,15 +10,13 @@ from flask import Flask, jsonify, render_template_string, request
 
 app = Flask(__name__)
 
-URL_BASE = "https://cuandollega.smartmovepro.net/indalo/recorridos"
-URL_API = "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribos"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1. Cargar paradas optimizadas y trazas
-with open("paradas_optimizadas.json", "r", encoding="utf-8") as f:
+# 1. Cargar paradas y trazas con rutas seguras
+with open(os.path.join(BASE_DIR, "paradas_optimizadas.json"), "r", encoding="utf-8") as f:
     PARADAS_DATA = json.load(f)
 
-# Extraer trazas limpias de urbano y r.json
-with open("urbano y r.json", "r", encoding="utf-8") as f:
+with open(os.path.join(BASE_DIR, "urbano y r.json"), "r", encoding="utf-8") as f:
     raw_recorridos = json.load(f)["DBCuandoLlega"]["recorridos"]
 
 MAPA_LINEAS = {"1013": "50A", "1014": "50B", "1015": "50R", "1016": "URBANO"}
@@ -36,18 +34,25 @@ for rec in raw_recorridos:
         if p.get("latitud") and p.get("longitud")
     ]
 
-# Malla mínima de 4 terminales para rastreo pasivo de fondo
-TERMINALES_FONDO = [
-    {"linea": "50A", "cod": "1013", "parada": "NV1244"}, # Plottier 108 Viv
-    {"linea": "50B", "cod": "1014", "parada": "NV2000"}, # Cabecera Plottier
-    {"linea": "50R", "cod": "1015", "parada": "NV5028"}, # China Muerta
-    {"linea": "URBANO", "cod": "1016", "parada": "NV1259"}
+URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
+URL_BASE = "https://cuandollega.smartmovepro.net/indalo/recorridos"
+URL_API = "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribos"
+
+PARADAS_RADAR = [
+    {"linea": "50A", "cod": "1013", "parada": "NV1014"},
+    {"linea": "50A", "cod": "1013", "parada": "NV1032"},
+    {"linea": "50B", "cod": "1014", "parada": "NV2000"},
+    {"linea": "50B", "cod": "1014", "parada": "NV1060"},
+    {"linea": "50R", "cod": "1015", "parada": "NV5000"},
+    {"linea": "50R", "cod": "1015", "parada": "NV5028"},
+    {"linea": "URBANO", "cod": "1016", "parada": "NV7016"}
 ]
 
 ESTADO_GLOBAL = {
     "timestamp": "--:--:--",
     "buses": {},
-    "cabeceras": []
+    "fuente": "Iniciando...",
+    "logs": []
 }
 
 CACHE_PARADAS = {}
@@ -56,28 +61,32 @@ def obtener_sesion_smp():
     s = requests.Session()
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
-        r = s.get(URL_BASE, headers=headers, timeout=10)
-        m = re.search(r'CfDJ8[A-Za-z0-9_\-]{80,}', r.text) or re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', r.text)
-        token = m.group(1) if m and m.groups() else (m.group(0) if m else None)
-        return s, token
+        r = s.get(URL_BASE, headers=headers, timeout=8)
+        if r.status_code == 200:
+            m = re.search(r'CfDJ8[A-Za-z0-9_\-]{80,}', r.text) or re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', r.text)
+            token = m.group(1) if m and m.groups() else (m.group(0) if m else None)
+            return s, token
     except Exception:
-        return None, None
+        pass
+    return None, None
 
 def procesar_arribos_en_radar(arribos, linea_nom, id_parada):
     global ESTADO_GLOBAL
     ahora_ts = time.time()
     for a in arribos:
-        if not a.get("latitud") or not a.get("longitud"):
+        lat_raw = a.get("latitud") or a.get("lat")
+        lon_raw = a.get("longitud") or a.get("lon")
+        if not lat_raw or not lon_raw:
             continue
         try:
-            lat = float(str(a["latitud"]).replace(',', '.'))
-            lon = float(str(a["longitud"]).replace(',', '.'))
+            lat = float(str(lat_raw).replace(',', '.'))
+            lon = float(str(lon_raw).replace(',', '.'))
             if abs(lat) < 1 or abs(lon) < 1:
                 continue
         except ValueError:
             continue
 
-        bandera = str(a.get("descripcionBandera") or "").upper()
+        bandera = str(a.get("descripcionBandera") or a.get("ramal") or "").upper()
         sentido = "Hacia Neuquén" if "VUELTA" in bandera else "Hacia Plottier"
         sentido_code = "HACIA_NEUQUEN" if "VUELTA" in bandera else "HACIA_PLOTTIER"
 
@@ -86,10 +95,10 @@ def procesar_arribos_en_radar(arribos, linea_nom, id_parada):
         ESTADO_GLOBAL["buses"][id_unidad] = {
             "id": id_unidad,
             "linea": linea_nom,
-            "ramal": a.get("descripcionBandera"),
+            "ramal": a.get("descripcionBandera") or a.get("ramal"),
             "sentido": sentido,
             "sentido_code": sentido_code,
-            "tiempo_arribo": a.get("tiempoRestanteArribo"),
+            "tiempo_arribo": a.get("tiempoRestanteArribo") or a.get("tiempo"),
             "lat": lat,
             "lon": lon,
             "parada_detectada": id_parada,
@@ -98,51 +107,79 @@ def procesar_arribos_en_radar(arribos, linea_nom, id_parada):
 
 def recolector_segundo_plano():
     global ESTADO_GLOBAL
-    session, token = obtener_sesion_smp()
+    print("[INICIO] Recolector arrancado correctamente.", flush=True)
 
     while True:
-        if not session or not token:
-            session, token = obtener_sesion_smp()
-            time.sleep(5)
-            continue
+        # Intento 1: Consultar directamente a SmartMovePro
+        session, token = obtener_sesion_smp()
+        exito_directo = False
 
-        for item in TERMINALES_FONDO:
+        if session and token:
+            print("[CONEXIÓN DIRECTA] Conectado a SmartMovePro.", flush=True)
+            for item in PARADAS_RADAR:
+                try:
+                    headers = {
+                        "User-Agent": "Mozilla/5.0",
+                        "Origin": "https://cuandollega.smartmovepro.net",
+                        "Referer": URL_BASE,
+                        "RequestVerificationToken": token,
+                        "X-Requested-With": "XMLHttpRequest"
+                    }
+                    payload = {"IdentificadorParada": item["parada"], "CodigoLinea": item["cod"]}
+                    res = session.post(URL_API, json=payload, headers=headers, timeout=7)
+                    if res.status_code == 200:
+                        exito_directo = True
+                        data = res.json()
+                        procesar_arribos_en_radar(data.get("arribos", []), item["linea"], item["parada"])
+                    elif res.status_code == 429:
+                        time.sleep(10)
+                except Exception:
+                    break
+                time.sleep(3.5)
+
+        # Intento 2 (Fallback): Si la IP de Render fue bloqueada, consultar mediante el Cloudflare Worker
+        if not exito_directo:
+            print("[FALLBACK] Conectando mediante Worker Cloudflare...", flush=True)
             try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0",
-                    "Origin": "https://cuandollega.smartmovepro.net",
-                    "Referer": URL_BASE,
-                    "RequestVerificationToken": token,
-                    "X-Requested-With": "XMLHttpRequest"
-                }
-                payload = {"IdentificadorParada": item["parada"], "CodigoLinea": item["cod"]}
-                res = session.post(URL_API, json=payload, headers=headers, timeout=8)
+                r_work = requests.get(URL_WORKER, timeout=10)
+                if r_work.status_code == 200:
+                    data = r_work.json()
+                    buses_worker = data.get("buses", [])
+                    for b in buses_worker:
+                        procesar_arribos_en_radar([b], b.get("linea"), b.get("parada_detectada", "Worker"))
+                    ESTADO_GLOBAL["fuente"] = "Cloudflare Worker (Borde)"
+            except Exception as e:
+                print(f"[WORKER ERROR] {e}", flush=True)
+        else:
+            ESTADO_GLOBAL["fuente"] = "SmartMovePro Directo"
 
-                if res.status_code == 429:
-                    time.sleep(15) # Espera ante rate-limit
-                    continue
-                elif res.status_code == 200:
-                    data = res.json()
-                    procesar_arribos_en_radar(data.get("arribos", []), item["linea"], item["parada"])
-            except Exception:
-                session, token = None, None
-                break
-
-            time.sleep(4) # Pausa de 4 segundos entre terminales
-
-        # Limpiar unidades sin reporte en más de 3.5 minutos (210 segundos)
+        # Limpiar colectivos que no actualicen posición en más de 3.5 minutos
         ahora = time.time()
         ESTADO_GLOBAL["buses"] = {
             k: v for k, v in ESTADO_GLOBAL["buses"].items()
             if ahora - v["updated_at"] < 210
         }
 
-        tz = zoneinfo.ZoneInfo("America/Argentina/Buenos_Aires")
-        ESTADO_GLOBAL["timestamp"] = datetime.now(tz).strftime("%H:%M:%S")
+        try:
+            tz = zoneinfo.ZoneInfo("America/Argentina/Buenos_Aires")
+            ESTADO_GLOBAL["timestamp"] = datetime.now(tz).strftime("%H:%M:%S")
+        except Exception:
+            ESTADO_GLOBAL["timestamp"] = time.strftime("%H:%M:%S")
+
+        print(f"[RADAR] {ESTADO_GLOBAL['timestamp']} | Unidades activas: {len(ESTADO_GLOBAL['buses'])} ({ESTADO_GLOBAL['fuente']})", flush=True)
+        time.sleep(15)
 
 Thread(target=recolector_segundo_plano, daemon=True).start()
 
-# Endpoint para consultar paradas individuales
+@app.route('/debug')
+def debug():
+    return jsonify({
+        "timestamp": ESTADO_GLOBAL["timestamp"],
+        "fuente": ESTADO_GLOBAL["fuente"],
+        "total_buses": len(ESTADO_GLOBAL["buses"]),
+        "buses": list(ESTADO_GLOBAL["buses"].values())
+    })
+
 @app.route('/api/parada')
 def api_parada():
     p_id = request.args.get("id")
@@ -152,41 +189,20 @@ def api_parada():
     if not p_id or not p_cod:
         return jsonify({"arribos": []})
 
-    # Cache de 15 segundos por parada para evitar spam
     cache_key = f"{p_id}_{p_cod}"
     ahora = time.time()
     if cache_key in CACHE_PARADAS and (ahora - CACHE_PARADAS[cache_key]["ts"] < 15):
         return jsonify(CACHE_PARADAS[cache_key]["data"])
 
-    session, token = obtener_sesion_smp()
-    if not session or not token:
-        return jsonify({"arribos": []})
-
+    # Consultar parada individual a través del Worker (evita CORS y bloqueos de IP)
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Origin": "https://cuandollega.smartmovepro.net",
-            "Referer": URL_BASE,
-            "RequestVerificationToken": token,
-            "X-Requested-With": "XMLHttpRequest"
-        }
-        r = session.post(URL_API, json={"IdentificadorParada": p_id, "CodigoLinea": p_cod}, headers=headers, timeout=8)
+        url_parada = f"{URL_WORKER}parada?id={p_id}&cod={p_cod}&linea={p_linea}"
+        r = requests.get(url_parada, timeout=8)
         if r.status_code == 200:
             data = r.json()
             arribos = data.get("arribos", [])
-
-            # Crowdsourcing: inyectar las coordenadas al radar general
             procesar_arribos_en_radar(arribos, p_linea, p_id)
-
-            arribos_formateados = [
-                {
-                    "ramal": a.get("descripcionBandera"),
-                    "tiempo": a.get("tiempoRestanteArribo"),
-                    "sentido": "Hacia Neuquén" if "VUELTA" in str(a.get("descripcionBandera", "")).upper() else "Hacia Plottier",
-                    "sentido_code": "HACIA_NEUQUEN" if "VUELTA" in str(a.get("descripcionBandera", "")).upper() else "HACIA_PLOTTIER"
-                } for a in arribos
-            ]
-            resultado = {"arribos": arribos_formateados}
+            resultado = {"arribos": arribos}
             CACHE_PARADAS[cache_key] = {"data": resultado, "ts": ahora}
             return jsonify(resultado)
     except Exception:
@@ -285,7 +301,6 @@ HTML_COMPLETO = """
       capaRuta = L.layerGroup().addTo(map);
       capaParadas = L.layerGroup().addTo(map);
 
-      // Cargar datos estáticos desde Flask
       const r = await fetch('/api/static_data');
       const staticData = await r.json();
       RUTAS_GEO = staticData.trazas;
@@ -336,7 +351,7 @@ HTML_COMPLETO = """
             h += `<div style="margin-bottom:3px;"><strong>${a.ramal}</strong> (${a.sentido})<br>Arribo: <span style="color:#27ae60; font-weight:bold;">${a.tiempo}</span></div>`;
           });
           box.innerHTML = h;
-          pedirDatos(); // Actualizar el mapa con los buses descubiertos
+          pedirDatos();
         }
       } catch (e) {
         box.innerHTML = 'Error al consultar.';
