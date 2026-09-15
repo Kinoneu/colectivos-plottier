@@ -1,7 +1,7 @@
 import os
 import time
 import json
-import re
+import math
 import requests
 from datetime import datetime
 import zoneinfo
@@ -14,7 +14,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 1. Cargar paradas y trazas con rutas seguras
 with open(os.path.join(BASE_DIR, "paradas_optimizadas.json"), "r", encoding="utf-8") as f:
-    PARADAS_DATA = json.load(f)
+    PARADAS_RAW = json.load(f)
 
 with open(os.path.join(BASE_DIR, "urbano y r.json"), "r", encoding="utf-8") as f:
     raw_recorridos = json.load(f)["DBCuandoLlega"]["recorridos"]
@@ -34,131 +34,142 @@ for rec in raw_recorridos:
         if p.get("latitud") and p.get("longitud")
     ]
 
+# 2. Agrupar paradas que estén a menos de 35 metros (evita 4 botones en una esquina)
+def agrupar_paradas(paradas, radio_mts=35):
+    grupos = []
+    for p in paradas:
+        id_p, lat, lon, desc, lineas = p
+        unido = False
+        for g in grupos:
+            d_lat = (lat - g["lat"]) * 111139
+            d_lon = (lon - g["lon"]) * 111139 * 0.777
+            if math.sqrt(d_lat**2 + d_lon**2) <= radio_mts:
+                for lin_nom, lin_cod in lineas.items():
+                    if lin_nom not in g["lineas"]:
+                        g["lineas"][lin_nom] = {"cod": lin_cod, "parada": id_p}
+                if id_p not in g["ids"]:
+                    g["ids"].append(id_p)
+                unido = True
+                break
+        if not unido:
+            grupos.append({
+                "ids": [id_p],
+                "lat": lat,
+                "lon": lon,
+                "desc": desc,
+                "lineas": {lin_nom: {"cod": lin_cod, "parada": id_p} for lin_nom, lin_cod in lineas.items()}
+            })
+    return [
+        [" / ".join(g["ids"][:2]), g["lat"], g["lon"], g["desc"], g["lineas"]]
+        for g in grupos
+    ]
+
+PARADAS_CLUSTERIZADAS = agrupar_paradas(PARADAS_RAW)
+
 URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
-URL_BASE = "https://cuandollega.smartmovepro.net/indalo/recorridos"
-URL_API = "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribos"
 
-PARADAS_RADAR = [
-    {"linea": "50A", "cod": "1013", "parada": "NV1014"},
-    {"linea": "50A", "cod": "1013", "parada": "NV1032"},
-    {"linea": "50B", "cod": "1014", "parada": "NV2000"},
-    {"linea": "50B", "cod": "1014", "parada": "NV1060"},
-    {"linea": "50R", "cod": "1015", "parada": "NV5000"},
-    {"linea": "50R", "cod": "1015", "parada": "NV5028"},
-    {"linea": "URBANO", "cod": "1016", "parada": "NV7016"}
-]
-
+# Estado global con tracker persistente de unidades
 ESTADO_GLOBAL = {
     "timestamp": "--:--:--",
-    "buses": {},
-    "fuente": "Iniciando...",
-    "logs": []
+    "buses": {}, # key: bus_id -> datos
+    "contador_ids": 1
 }
 
-CACHE_PARADAS = {}
+def distancia_km(lat1, lon1, lat2, lon2):
+    d_lat = (lat1 - lat2) * 111.0
+    d_lon = (lon1 - lon2) * 111.0 * 0.777
+    return math.sqrt(d_lat**2 + d_lon**2)
 
-def obtener_sesion_smp():
-    s = requests.Session()
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    try:
-        r = s.get(URL_BASE, headers=headers, timeout=8)
-        if r.status_code == 200:
-            m = re.search(r'CfDJ8[A-Za-z0-9_\-]{80,}', r.text) or re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', r.text)
-            token = m.group(1) if m and m.groups() else (m.group(0) if m else None)
-            return s, token
-    except Exception:
-        pass
-    return None, None
-
-def procesar_arribos_en_radar(arribos, linea_nom, id_parada):
+def procesar_nuevas_posiciones(detecciones):
     global ESTADO_GLOBAL
-    ahora_ts = time.time()
-    for a in arribos:
-        lat_raw = a.get("latitud") or a.get("lat")
-        lon_raw = a.get("longitud") or a.get("lon")
-        if not lat_raw or not lon_raw:
-            continue
-        try:
-            lat = float(str(lat_raw).replace(',', '.'))
-            lon = float(str(lon_raw).replace(',', '.'))
-            if abs(lat) < 1 or abs(lon) < 1:
-                continue
-        except ValueError:
+    ahora = time.time()
+
+    for d in detecciones:
+        lat = d.get("lat")
+        lon = d.get("lon")
+        linea = d.get("linea")
+        if not lat or not lon or not linea:
             continue
 
-        bandera = str(a.get("descripcionBandera") or a.get("ramal") or "").upper()
-        sentido = "Hacia Neuquén" if "VUELTA" in bandera else "Hacia Plottier"
-        sentido_code = "HACIA_NEUQUEN" if "VUELTA" in bandera else "HACIA_PLOTTIER"
+        # 1. Buscar si esta posición corresponde a un colectivo existente (a menos de 1.8 km)
+        bus_match_id = None
+        min_dist = 1.8
+        for b_id, b in ESTADO_GLOBAL["buses"].items():
+            if b["linea"] == linea:
+                dist = distancia_km(b["lat"], b["lon"], lat, lon)
+                if dist < min_dist:
+                    min_dist = dist
+                    bus_match_id = b_id
 
-        id_unidad = f"{linea_nom}_{sentido_code}_{round(lat, 2)}_{round(lon, 2)}"
+        if bus_match_id:
+            # Colectivo existente que avanzó: determinar sentido por desplazamiento real
+            bus = ESTADO_GLOBAL["buses"][bus_match_id]
+            delta_lon = lon - bus["lon"]
 
-        ESTADO_GLOBAL["buses"][id_unidad] = {
-            "id": id_unidad,
-            "linea": linea_nom,
-            "ramal": a.get("descripcionBandera") or a.get("ramal"),
-            "sentido": sentido,
-            "sentido_code": sentido_code,
-            "tiempo_arribo": a.get("tiempoRestanteArribo") or a.get("tiempo"),
-            "lat": lat,
-            "lon": lon,
-            "parada_detectada": id_parada,
-            "updated_at": ahora_ts
-        }
+            if abs(delta_lon) > 0.0003: # Se movió al menos 25 metros
+                if delta_lon < 0: # Longitud más negativa = va al Oeste (Plottier)
+                    sentido = "Hacia Plottier"
+                    sentido_code = "HACIA_PLOTTIER"
+                else: # Longitud menos negativa = va al Este (Neuquén)
+                    sentido = "Hacia Neuquén"
+                    sentido_code = "HACIA_NEUQUEN"
+            else:
+                sentido = bus["sentido"]
+                sentido_code = bus["sentido_code"]
 
-def recolector_segundo_plano():
-    global ESTADO_GLOBAL
-    print("[INICIO] Recolector arrancado correctamente.", flush=True)
-
-    while True:
-        # Intento 1: Consultar directamente a SmartMovePro
-        session, token = obtener_sesion_smp()
-        exito_directo = False
-
-        if session and token:
-            print("[CONEXIÓN DIRECTA] Conectado a SmartMovePro.", flush=True)
-            for item in PARADAS_RADAR:
-                try:
-                    headers = {
-                        "User-Agent": "Mozilla/5.0",
-                        "Origin": "https://cuandollega.smartmovepro.net",
-                        "Referer": URL_BASE,
-                        "RequestVerificationToken": token,
-                        "X-Requested-With": "XMLHttpRequest"
-                    }
-                    payload = {"IdentificadorParada": item["parada"], "CodigoLinea": item["cod"]}
-                    res = session.post(URL_API, json=payload, headers=headers, timeout=7)
-                    if res.status_code == 200:
-                        exito_directo = True
-                        data = res.json()
-                        procesar_arribos_en_radar(data.get("arribos", []), item["linea"], item["parada"])
-                    elif res.status_code == 429:
-                        time.sleep(10)
-                except Exception:
-                    break
-                time.sleep(3.5)
-
-        # Intento 2 (Fallback): Si la IP de Render fue bloqueada, consultar mediante el Cloudflare Worker
-        if not exito_directo:
-            print("[FALLBACK] Conectando mediante Worker Cloudflare...", flush=True)
-            try:
-                r_work = requests.get(URL_WORKER, timeout=10)
-                if r_work.status_code == 200:
-                    data = r_work.json()
-                    buses_worker = data.get("buses", [])
-                    for b in buses_worker:
-                        procesar_arribos_en_radar([b], b.get("linea"), b.get("parada_detectada", "Worker"))
-                    ESTADO_GLOBAL["fuente"] = "Cloudflare Worker (Borde)"
-            except Exception as e:
-                print(f"[WORKER ERROR] {e}", flush=True)
+            bus.update({
+                "lat": lat,
+                "lon": lon,
+                "sentido": sentido,
+                "sentido_code": sentido_code,
+                "tiempo_arribo": d.get("tiempo_arribo") or bus.get("tiempo_arribo"),
+                "updated_at": ahora
+            })
         else:
-            ESTADO_GLOBAL["fuente"] = "SmartMovePro Directo"
+            # Nuevo colectivo detectado
+            nuevo_id = f"{linea}_{ESTADO_GLOBAL['contador_ids']}"
+            ESTADO_GLOBAL["contador_ids"] += 1
 
-        # Limpiar colectivos que no actualicen posición en más de 3.5 minutos
-        ahora = time.time()
-        ESTADO_GLOBAL["buses"] = {
-            k: v for k, v in ESTADO_GLOBAL["buses"].items()
-            if ahora - v["updated_at"] < 210
-        }
+            # Sentido inicial por comparación de cercanía a la traza IDA / VUELTA
+            sentido = "Hacia Plottier"
+            sentido_code = "HACIA_PLOTTIER"
+            if linea in TRAZAS_GEO:
+                pts_vuelta = TRAZAS_GEO[linea].get("HACIA_NEUQUEN", [])
+                pts_ida = TRAZAS_GEO[linea].get("HACIA_PLOTTIER", [])
+                d_vuelta = min([distancia_km(lat, lon, p[0], p[1]) for p in pts_vuelta], default=99)
+                d_ida = min([distancia_km(lat, lon, p[0], p[1]) for p in pts_ida], default=99)
+                if d_vuelta < d_ida:
+                    sentido = "Hacia Neuquén"
+                    sentido_code = "HACIA_NEUQUEN"
+
+            ESTADO_GLOBAL["buses"][nuevo_id] = {
+                "id": nuevo_id,
+                "linea": linea,
+                "ramal": d.get("ramal") or f"Línea {linea}",
+                "sentido": sentido,
+                "sentido_code": sentido_code,
+                "tiempo_arribo": d.get("tiempo_arribo"),
+                "lat": lat,
+                "lon": lon,
+                "updated_at": ahora
+            }
+
+    # Eliminar unidades sin reporte tras 75 segundos (evita fantasmas en fila)
+    ESTADO_GLOBAL["buses"] = {
+        k: v for k, v in ESTADO_GLOBAL["buses"].items()
+        if ahora - v["updated_at"] < 75
+    }
+
+def recolector_fondo():
+    global ESTADO_GLOBAL
+    while True:
+        try:
+            r = requests.get(URL_WORKER, timeout=12)
+            if r.status_code == 200:
+                data = r.json()
+                procesar_nuevas_posiciones(data.get("buses", []))
+        except Exception:
+            pass
 
         try:
             tz = zoneinfo.ZoneInfo("America/Argentina/Buenos_Aires")
@@ -166,19 +177,9 @@ def recolector_segundo_plano():
         except Exception:
             ESTADO_GLOBAL["timestamp"] = time.strftime("%H:%M:%S")
 
-        print(f"[RADAR] {ESTADO_GLOBAL['timestamp']} | Unidades activas: {len(ESTADO_GLOBAL['buses'])} ({ESTADO_GLOBAL['fuente']})", flush=True)
-        time.sleep(15)
+        time.sleep(12)
 
-Thread(target=recolector_segundo_plano, daemon=True).start()
-
-@app.route('/debug')
-def debug():
-    return jsonify({
-        "timestamp": ESTADO_GLOBAL["timestamp"],
-        "fuente": ESTADO_GLOBAL["fuente"],
-        "total_buses": len(ESTADO_GLOBAL["buses"]),
-        "buses": list(ESTADO_GLOBAL["buses"].values())
-    })
+Thread(target=recolector_fondo, daemon=True).start()
 
 @app.route('/api/parada')
 def api_parada():
@@ -189,25 +190,19 @@ def api_parada():
     if not p_id or not p_cod:
         return jsonify({"arribos": []})
 
-    cache_key = f"{p_id}_{p_cod}"
-    ahora = time.time()
-    if cache_key in CACHE_PARADAS and (ahora - CACHE_PARADAS[cache_key]["ts"] < 15):
-        return jsonify(CACHE_PARADAS[cache_key]["data"])
-
-    # Consultar parada individual a través del Worker (evita CORS y bloqueos de IP)
     try:
-        url_parada = f"{URL_WORKER}parada?id={p_id}&cod={p_cod}&linea={p_linea}"
-        r = requests.get(url_parada, timeout=8)
+        r = requests.get(f"{URL_WORKER}parada?id={p_id}&cod={p_cod}&linea={p_linea}", timeout=8)
         if r.status_code == 200:
             data = r.json()
             arribos = data.get("arribos", [])
-            procesar_arribos_en_radar(arribos, p_linea, p_id)
-            resultado = {"arribos": arribos}
-            CACHE_PARADAS[cache_key] = {"data": resultado, "ts": ahora}
-            return jsonify(resultado)
+            # Inyectar las posiciones descubiertas al radar
+            procesar_nuevas_posiciones([
+                {**a, "linea": p_linea, "tiempo_arribo": a.get("tiempo")}
+                for a in arribos if a.get("lat") and a.get("lon")
+            ])
+            return jsonify({"arribos": arribos})
     except Exception:
         pass
-
     return jsonify({"arribos": []})
 
 @app.route('/api/radar')
@@ -222,7 +217,7 @@ def api_radar():
 def api_static_data():
     return jsonify({
         "trazas": TRAZAS_GEO,
-        "paradas": PARADAS_DATA
+        "paradas": PARADAS_CLUSTERIZADAS
     })
 
 @app.route('/')
@@ -244,7 +239,7 @@ HTML_COMPLETO = """
     h1 { font-size: 22px; color: #89B4FA; font-weight: 800; }
     .sub { font-size: 13px; color: #A6ADC8; margin-top: 2px; }
     #map-container { position: relative; margin-bottom: 16px; border-radius: 14px; overflow: hidden; border: 1px solid #313244; }
-    #map { height: 420px; width: 100%; background: #11111B; }
+    #map { height: 440px; width: 100%; background: #11111B; }
     .map-badge { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(24, 24, 37, 0.9); backdrop-filter: blur(6px); padding: 6px 12px; border-radius: 8px; font-size: 12px; color: #CDD6F4; border: 1px solid #313244; font-weight: 700; }
     .map-controls { position: absolute; bottom: 10px; right: 10px; z-index: 1000; display: flex; gap: 6px; }
     .btn-map-control { background: rgba(24, 24, 37, 0.9); border: 1px solid #45475A; color: #CDD6F4; font-size: 11px; font-weight: 700; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
@@ -253,8 +248,8 @@ HTML_COMPLETO = """
     .btn-refresh { background: #89B4FA; color: #11111B; border: none; font-size: 14px; font-weight: 700; padding: 10px 18px; border-radius: 10px; cursor: pointer; }
     .status-text { font-size: 12px; color: #A6ADC8; }
 
-    .leaflet-marker-icon { transition: transform 1.8s cubic-bezier(0.25, 1, 0.5, 1) !important; cursor: pointer; }
-    .bus-marker { display: flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 8px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+    /* Los marcadores NO usan transform transition para no romper el zoom */
+    .bus-marker { display: flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 8px; font-size: 11px; font-weight: 800; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); }
     .bus-marker-50a { background: #1E3A24; border: 2px solid #A6E3A1; color: #A6E3A1; }
     .bus-marker-50b { background: #1E2D42; border: 2px solid #89B4FA; color: #89B4FA; }
     .bus-marker-50r { background: #38243E; border: 2px solid #CBA6F7; color: #CBA6F7; }
@@ -269,11 +264,11 @@ HTML_COMPLETO = """
 <body>
   <header>
     <h1>Transporte Plottier</h1>
-    <p class="sub">GPS en vivo: 50A, 50B, 50R y Urbano</p>
+    <p class="sub">GPS en vivo (50A, 50B, 50R y Urbano)</p>
   </header>
 
   <div id="map-container">
-    <div class="map-badge" id="bus-count">Iniciando radar...</div>
+    <div class="map-badge" id="bus-count">Sincronizando radar...</div>
     <div class="map-controls">
       <button class="btn-map-control" id="btn-toggle-stops" onclick="toggleParadas()">📍 Ocultar Paradas</button>
       <button class="btn-map-control" id="btn-clear" onclick="limpiarRutas()" style="display:none;">✕ Quitar Recorrido</button>
@@ -294,7 +289,7 @@ HTML_COMPLETO = """
     let mostrandoParadas = true;
 
     async function init() {
-      map = L.map('map', { zoomControl: false }).setView([-38.955, -68.20], 12);
+      map = L.map('map', { zoomControl: false }).setView([-38.955, -68.18], 12);
       L.control.zoom({ position: 'topright' }).addTo(map);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
 
@@ -307,7 +302,7 @@ HTML_COMPLETO = """
 
       dibujarParadas(staticData.paradas);
       pedirDatos();
-      setInterval(pedirDatos, 15000);
+      setInterval(pedirDatos, 12000);
     }
 
     function dibujarParadas(paradas) {
@@ -315,8 +310,8 @@ HTML_COMPLETO = """
       paradas.forEach(p => {
         const id = p[0], lat = p[1], lon = p[2], desc = p[3], lineas = p[4];
         let botones = '';
-        for (const [linNom, codLin] of Object.entries(lineas)) {
-          botones += `<button class="btn-query-stop" onclick="consultarParada('${id}', '${codLin}', '${linNom}')">⏱️ Ver ${linNom}</button>`;
+        for (const [linNom, info] of Object.entries(lineas)) {
+          botones += `<button class="btn-query-stop" onclick="consultarParada('${info.parada}', '${info.cod}', '${linNom}')">⏱️ ${linNom}</button>`;
         }
 
         const marker = L.circleMarker([lat, lon], {
@@ -325,8 +320,8 @@ HTML_COMPLETO = """
 
         marker.bindPopup(`
           <div style="min-width:160px;">
-            <div class="stop-popup-title">📍 Parada ${id}</div>
-            <div class="stop-popup-desc">${desc}</div>
+            <div class="stop-popup-title">📍 ${desc}</div>
+            <div class="stop-popup-desc">Ref: ${id}</div>
             <div>${botones}</div>
             <div id="res-${id}" class="result-box" style="display:none;"></div>
           </div>
@@ -335,27 +330,50 @@ HTML_COMPLETO = """
       });
     }
 
-    async function consultarParada(id, cod, linea) {
-      const box = document.getElementById(`res-${id}`);
-      box.style.display = 'block';
-      box.innerHTML = '<em>Consultando arribo...</em>';
+    async function consultarParada(idParada, codLinea, linNom) {
+      const box = document.querySelector('.leaflet-popup-content .result-box');
+      if (box) {
+        box.style.display = 'block';
+        box.innerHTML = `<em>Consultando arribos de ${linNom}...</em>`;
+      }
 
       try {
-        const r = await fetch(`/api/parada?id=${id}&cod=${cod}&linea=${linea}`);
+        const r = await fetch(`/api/parada?id=${idParada}&cod=${codLinea}&linea=${linNom}`);
         const data = await r.json();
         if (!data.arribos || data.arribos.length === 0) {
-          box.innerHTML = `Sin arribos próximos para ${linea}.`;
+          if (box) box.innerHTML = `Sin arribos próximos para ${linNom}.`;
         } else {
           let h = '';
           data.arribos.forEach(a => {
             h += `<div style="margin-bottom:3px;"><strong>${a.ramal}</strong> (${a.sentido})<br>Arribo: <span style="color:#27ae60; font-weight:bold;">${a.tiempo}</span></div>`;
           });
-          box.innerHTML = h;
+          if (box) box.innerHTML = h;
           pedirDatos();
         }
       } catch (e) {
-        box.innerHTML = 'Error al consultar.';
+        if (box) box.innerHTML = 'Error al consultar parada.';
       }
+    }
+
+    // Animación fluida nativa vía requestAnimationFrame (no se descalibra con el zoom)
+    function deslizarMarcador(marker, destLat, destLon) {
+      const from = marker.getLatLng();
+      const to = L.latLng(destLat, destLon);
+      if (from.distanceTo(to) < 1) return;
+      if (from.distanceTo(to) > 2500) { marker.setLatLng(to); return; }
+
+      let start = null;
+      const duration = 1200;
+
+      function step(timestamp) {
+        if (!start) start = timestamp;
+        const progress = Math.min((timestamp - start) / duration, 1);
+        const lat = from.lat + (to.lat - from.lat) * progress;
+        const lon = from.lng + (to.lng - from.lng) * progress;
+        marker.setLatLng([lat, lon]);
+        if (progress < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
     }
 
     function mostrarRuta(linea, sentidoCode) {
@@ -416,10 +434,18 @@ HTML_COMPLETO = """
           iconSize: [58, 24], iconAnchor: [29, 12]
         });
 
-        const popup = `<strong>Línea ${b.linea}</strong><br>${b.sentido}<br><span style="color:#27ae60; font-weight:bold;">${b.tiempo_arribo || 'En camino'}</span>`;
+        const colorSentido = b.sentido_code === 'HACIA_NEUQUEN' ? '#FAB387' : '#A6E3A1';
+        const popup = `
+          <div style="font-family:sans-serif; font-size:12px;">
+            <strong style="font-size:14px;">Línea ${b.linea}</strong><br>
+            <span style="color:${colorSentido}; font-weight:700;">${b.sentido}</span><br>
+            <span style="color:#666;">${b.ramal}</span>
+            <div style="color:#27ae60; font-weight:bold; margin-top:4px;">⏱️ Arribo: ${b.tiempo_arribo || 'En camino'}</div>
+          </div>
+        `;
 
         if (marcadoresBuses[b.id]) {
-          marcadoresBuses[b.id].setLatLng([b.lat, b.lon]);
+          deslizarMarcador(marcadoresBuses[b.id], b.lat, b.lon);
           marcadoresBuses[b.id].getPopup().setContent(popup);
         } else {
           const m = L.marker([b.lat, b.lon], { icon: icon });
