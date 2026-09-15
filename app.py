@@ -324,7 +324,7 @@ HTML_TEMPLATE = """
 
   <div class="credits">
     Desarrollado por <span class="author">Ramiro Alzogaray</span>
-    <span class="alias-badge">KaiLoos</span>
+    <span class="alias-badge">App en desarrollo, puede contener fallos</span>
   </div>
 
   <div class="bar-fixed">
