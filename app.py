@@ -620,7 +620,6 @@ HTML_COMPLETO = """
     }
     .dot-zone { width: 11px; height: 11px; border-radius: 3px; background: rgba(137, 180, 250, 0.35); border: 2px solid #89B4FA; display: inline-block; }
     .dot-next { width: 11px; height: 11px; border-radius: 3px; background: #1E3A24; border: 2px solid #A6E3A1; display: inline-block; }
-    .dot- stops-next { width: 11px; height: 11px; border-radius: 3px; background: rgba(249, 226, 175, 0.28); border: 2px solid #F9E2AF; display: inline-block; }
     .btn-clear-sched {
       background: #313244;
       color: #F38BA8;
@@ -892,58 +891,74 @@ HTML_COMPLETO = """
     const LIMITE_AVERIA_SEG = 240;     // 4 minutos (240s) para detenerse por pérdida de señal
     const DIST_MAX_EN_RUTA_MTS = 35;   // Si se aleja más de 35m de la ruta, 60fps se apaga
 
-    // --- PUNTOS DE CONTROL OFICIALES DE LAS PLANILLAS DE INDALO (RESALTADOS CON ✓) ---
+    // --- 7 PUNTOS DE CONTROL OFICIALES DE LAS PLANILLAS DE INDALO CON UBICACIÓN CORREGIDA ---
     const PUNTOS_CONTROL_OFICIALES = [
       {
         key: "LOTEO_SOCIAL",
         nombreOficial: "Loteo Social (Cabecera)",
-        lat: -38.930393, lon: -68.252000,
+        lat: -38.930393, lon: -68.252000, // Aristóbulo del Valle (NV1244)
         cols50A: [{ idx: 0, label: "Salida hacia Nqn" }],
         cols50B: [{ idx: 0, label: "Salida hacia Nqn" }]
       },
       {
         key: "SAN_MARTIN_TRABAJO",
         nombreOficial: "San Martín y Av. del Trabajo",
-        lat: -38.944473, lon: -68.225598,
+        lat: -38.944473, lon: -68.225598, // Av. del Trabajo y Av. San Martín (5200028)
         cols50A: [{ idx: 1, label: "Hacia Neuquén" }],
         cols50B: [{ idx: 6, label: "Regreso a Plottier" }]
       },
       {
         key: "CASA_CULTURA",
         nombreOficial: "Casa de la Cultura",
-        lat: -38.958755, lon: -68.243338,
+        lat: -38.950627, lon: -68.225753, // Av. San Martín y Martellota / Alberdi (NV8039 / NV 1301)
         cols50A: [{ idx: 7, label: "Regreso a Plottier" }],
         cols50B: [{ idx: 1, label: "Hacia Neuquén" }]
       },
       {
         key: "AMANCAY_MUTICIAS",
         nombreOficial: "Amancay y Las Muticias",
-        lat: -38.964520, lon: -68.243109,
+        lat: -38.964520, lon: -68.243109, // Los Canales sur (NV1038)
         cols50A: [{ idx: 6, label: "Regreso a Plottier" }],
         cols50B: [{ idx: 2, label: "Hacia Neuquén" }]
       },
       {
         key: "RUTA22_RIAVITZ",
         nombreOficial: "Ruta 22 y Riavitz",
-        lat: -38.956680, lon: -68.226224,
+        lat: -38.956680, lon: -68.226224, // Riavitz y Buenos Aires Norte / Ruta 22 (NV1066)
         cols50A: [{ idx: 5, label: "Regreso a Plottier" }],
         cols50B: []
       },
       {
         key: "RIO_COLORADO_IDA",
         nombreOficial: "Río Colorado y Ruta 22",
-        lat: -38.956568, lon: -68.167666,
+        lat: -38.956568, lon: -68.167666, // Límite Plottier-Neuquén (NV1012 / NV1027)
         cols50A: [{ idx: 2, label: "Hacia Neuquén" }, { idx: 4, label: "Hacia Plottier" }],
         cols50B: [{ idx: 3, label: "Hacia Neuquén" }, { idx: 5, label: "Hacia Plottier" }]
       },
       {
         key: "SAN_JUAN_BSAS",
         nombreOficial: "San Juan y Buenos Aires (Neuquén)",
-        lat: -38.944522, lon: -68.057589,
+        lat: -38.944522, lon: -68.057589, // Cabecera Centro Neuquén (NV1102)
         cols50A: [{ idx: 3, label: "Cabecera Neuquén" }],
         cols50B: [{ idx: 4, label: "Cabecera Neuquén" }]
       }
     ];
+
+    // Secuencia ordenada de Paradas Oficiales según línea y sentido para calcular la próxima parada del colectivo
+    const ORDEN_PARADAS_OFICIALES = {
+      "50A": {
+        "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
+        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "RUTA22_RIAVITZ", "AMANCAY_MUTICIAS", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
+      },
+      "50B": {
+        "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "CASA_CULTURA", "AMANCAY_MUTICIAS", "RUTA22_RIAVITZ", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
+        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
+      },
+      "DEFAULT": {
+        "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "CASA_CULTURA", "RUTA22_RIAVITZ", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
+        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "RUTA22_RIAVITZ", "CASA_CULTURA", "LOTEO_SOCIAL"]
+      }
+    };
 
     // --- BASE DE DATOS EXACTA DE LAS 4 PLANILLAS DE INDALO ---
     function generarFilasPlanilla(especiales, salidasRegulares, deltas, filaFinal) {
@@ -1066,7 +1081,6 @@ HTML_COMPLETO = """
       mostrarPlanilla(clavePlanillaActual);
     }
 
-    // Abre automáticamente el panel de abajo y resalta la zona seleccionada + próximos horarios + próximas paradas
     function desplegarPlanillaConZona(puntoKey, lineaPreferida = null) {
       const punto = PUNTOS_CONTROL_OFICIALES.find(p => p.key === puntoKey);
       if (!punto) return;
@@ -1114,10 +1128,9 @@ HTML_COMPLETO = """
       const es50A = clave.startsWith("50A");
       const infoTiempo = obtenerMinutosActualesArgentina();
 
-      // Determinar qué columnas y filas resaltar si hay una parada verificada seleccionada
       const colsSeleccionadas = new Set();
-      const celdasProximoArribo = new Set(); // "row_col" de los próximos 3 colectivos en la parada seleccionada
-      const celdasProximasParadas = new Set(); // "row_col" de las paradas siguientes de esos colectivos
+      const celdasProximoArribo = new Set();
+      const celdasProximasParadas = new Set();
       let primeraFilaResaltada = -1;
       let primeraColResaltada = -1;
 
@@ -1137,7 +1150,6 @@ HTML_COMPLETO = """
             colsSeleccionadas.add(cIdx);
             if (primeraColResaltada === -1) primeraColResaltada = cIdx;
 
-            // Buscar las próximas 3 filas a partir de la hora actual en esta columna
             const candidatos = [];
             data.filas.forEach((fila, rIdx) => {
               const hhmm = fila[cIdx];
@@ -1158,7 +1170,6 @@ HTML_COMPLETO = """
               celdasProximoArribo.add(`${item.rIdx}_${cIdx}`);
               if (primeraFilaResaltada === -1) primeraFilaResaltada = item.rIdx;
 
-              // Para los próximos 2 servicios, resaltar hacia la derecha los horarios en las próximas paradas
               if (orden < 2) {
                 for (let nextCol = cIdx + 1; nextCol < data.columnas.length; nextCol++) {
                   const valSig = data.filas[item.rIdx][nextCol];
@@ -1210,7 +1221,6 @@ HTML_COMPLETO = """
       const tableBox = document.getElementById('sched-table-box');
       tableBox.innerHTML = h;
 
-      // Auto-centrar la tabla en la zona y horario resaltados
       if (primeraColResaltada !== -1 || primeraFilaResaltada !== -1) {
         setTimeout(() => {
           const thEl = document.getElementById(`sched-th-${Math.max(0, primeraColResaltada)}`);
@@ -1378,30 +1388,69 @@ HTML_COMPLETO = """
       requestAnimationFrame(step);
     }
 
+    // Calcula únicamente cuál es la próxima Parada Oficial de la planilla y en cuántos minutos llega el colectivo
     function calcularProximaParada(bus) {
-      let mejorNombre = null;
-      let menorDist = Infinity;
-      const haciaNqn = bus.sentido_code === "HACIA_NEUQUEN";
+      const mapaOrden = ORDEN_PARADAS_OFICIALES[bus.linea] || ORDEN_PARADAS_OFICIALES["DEFAULT"];
+      const clavesOrden = mapaOrden[bus.sentido_code] || ORDEN_PARADAS_OFICIALES["DEFAULT"]["HACIA_PLOTTIER"];
+      const paradasRuta = clavesOrden
+        .map(k => PUNTOS_CONTROL_OFICIALES.find(p => p.key === k))
+        .filter(Boolean);
 
-      for (const p of PARADAS_LISTA) {
-        const idP = p[0], latP = p[1], lonP = p[2], descP = p[3], lineasP = p[4];
-        if (!lineasP || !lineasP[bus.linea]) continue;
+      const traza = (RUTAS_DENSAS[bus.linea] && RUTAS_DENSAS[bus.linea][bus.sentido_code]) || [];
 
-        const deltaLon = lonP - bus.simLon;
-        if (haciaNqn && deltaLon < -0.0005) continue;
-        if (!haciaNqn && deltaLon > 0.0005) continue;
+      if (traza.length > 2) {
+        const posBus = encontrarIndiceMasCercano(bus.simLat, bus.simLon, traza);
+        let mejorParada = null;
+        let mejorIdxStop = Infinity;
 
-        const d = distMts(bus.simLat, bus.simLon, latP, lonP);
-        if (d > 25 && d < menorDist) {
-          menorDist = d;
-          mejorNombre = (descP && descP !== idP) ? `${descP} (${idP})` : idP;
+        for (let i = 0; i < paradasRuta.length; i++) {
+          const pc = paradasRuta[i];
+          // Para la cabecera de salida (índice 0), solo considerarla si es el destino final
+          if (i === 0 && paradasRuta.length > 1) continue;
+          const posStop = encontrarIndiceMasCercano(pc.lat, pc.lon, traza);
+          if (posStop.index > posBus.index + 2 && posStop.index < mejorIdxStop) {
+            mejorIdxStop = posStop.index;
+            mejorParada = pc;
+          }
+        }
+
+        if (mejorParada) {
+          // Medir la distancia real siguiendo las calles de la traza
+          let distRecorridoMts = 0;
+          for (let k = posBus.index; k < mejorIdxStop; k++) {
+            distRecorridoMts += distMts(traza[k][0], traza[k][1], traza[k + 1][0], traza[k + 1][1]);
+          }
+          const velMps = Math.max(5.5, (bus.vel_kmh || 32) / 3.6);
+          const minEst = Math.max(1, Math.round((distRecorridoMts / velMps) / 60));
+          return `${mejorParada.nombreOficial} (~${minEst} min)`;
         }
       }
 
-      if (!mejorNombre || menorDist > 3500) return "Avanzando en recorrido";
-      const velMps = Math.max(4.5, (bus.vel_kmh || 32) / 3.6);
-      const minEst = Math.max(1, Math.round((menorDist / velMps) / 60));
-      return `${mejorNombre} (~${minEst} min)`;
+      // Respaldo geométrico hacia adelante si la unidad va por desvío o fuera de traza
+      const haciaNqn = bus.sentido_code === "HACIA_NEUQUEN";
+      let mejorParadaFallback = null;
+      let menorDist = Infinity;
+
+      for (let i = 1; i < paradasRuta.length; i++) {
+        const pc = paradasRuta[i];
+        const deltaLon = pc.lon - bus.simLon;
+        if (haciaNqn && deltaLon < -0.002) continue;
+        if (!haciaNqn && deltaLon > 0.002) continue;
+        const d = distMts(bus.simLat, bus.simLon, pc.lat, pc.lon);
+        if (d > 60 && d < menorDist) {
+          menorDist = d;
+          mejorParadaFallback = pc;
+        }
+      }
+
+      if (!mejorParadaFallback) {
+        mejorParadaFallback = paradasRuta[paradasRuta.length - 1];
+        menorDist = distMts(bus.simLat, bus.simLon, mejorParadaFallback.lat, mejorParadaFallback.lon);
+      }
+
+      const velMps = Math.max(5.5, (bus.vel_kmh || 32) / 3.6);
+      const minEst = Math.max(1, Math.round(((menorDist * 1.25) / velMps) / 60));
+      return `${mejorParadaFallback.nombreOficial} (~${minEst} min)`;
     }
 
     async function init() {
@@ -1435,7 +1484,7 @@ HTML_COMPLETO = """
 
       const mapaDestacadas = {};
       PUNTOS_CONTROL_OFICIALES.forEach(pc => {
-        let mejorIdx = -1, menorD = 220;
+        let mejorIdx = -1, menorD = 180;
         paradas.forEach((p, idx) => {
           const d = distMts(pc.lat, pc.lon, p[1], p[2]);
           if (d < menorD) {
@@ -1486,7 +1535,6 @@ HTML_COMPLETO = """
           </div>
         `);
 
-        // Al seleccionar una parada verificada, desplegar también abajo la planilla resaltando su zona y próximos horarios
         if (puntoOficial) {
           marker.on('popupopen', (e) => {
             const linInicial = lineas["50A"] ? "50A" : (lineas["50B"] ? "50B" : null);
@@ -1571,13 +1619,13 @@ HTML_COMPLETO = """
       const proxParada = calcularProximaParada(bus);
 
       return `
-        <div style="font-family:sans-serif; font-size:12px; min-width:175px;">
+        <div style="font-family:sans-serif; font-size:12px; min-width:180px;">
           <strong style="font-size:14px;">Línea ${bus.linea}</strong>
           <span style="color:#666; font-size:11px;">(${bus.ramal})</span><br>
           <span style="color:${colorSentido}; font-weight:800;">${bus.sentido}</span>
           ${estadoHTML}
           <div style="margin-top:5px; padding-top:4px; border-top:1px solid #ddd; font-size:11px; color:#222;">
-            📍 <strong>Próxima:</strong> ${proxParada}
+            📍 <strong>Próxima Parada Oficial:</strong><br>${proxParada}
           </div>
         </div>
       `;
@@ -1789,11 +1837,10 @@ HTML_COMPLETO = """
             sim.marker.setIcon(construirIcono(sim));
           }
 
-          sim.marker.getPopup().setContent(generarHTMLPopup(sim));
-          sim.marker.off('click').on('click', () => {
+          // Actualizar contenido sin usar .off('click') para no romper la apertura en móviles
+          if (sim.marker.isPopupOpen()) {
             sim.marker.getPopup().setContent(generarHTMLPopup(sim));
-            mostrarRuta(sim.linea, sim.sentido_code);
-          });
+          }
         } else {
           const nuevoSim = {
             ...b,
@@ -1809,8 +1856,8 @@ HTML_COMPLETO = """
           };
           nuevoSim.estadoVisual = obtenerEstadoVisual(nuevoSim);
           const m = L.marker([b.lat, b.lon], { icon: construirIcono(nuevoSim) });
-          m.bindPopup(generarHTMLPopup(nuevoSim));
-          m.on('click', () => {
+          m.bindPopup(() => generarHTMLPopup(nuevoSim));
+          m.on('popupopen', () => {
             m.getPopup().setContent(generarHTMLPopup(nuevoSim));
             mostrarRuta(nuevoSim.linea, nuevoSim.sentido_code);
           });
