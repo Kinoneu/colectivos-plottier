@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 import zoneinfo
 from threading import Thread
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_file
 
 app = Flask(__name__)
 
@@ -215,7 +215,6 @@ def procesar_nuevas_posiciones(detecciones):
                     "last_gps_at": ahora
                 })
             else:
-                # Misma coordenada pero la API confirma que sigue activo
                 if ahora - bus["last_gps_at"] < 40:
                     bus["last_gps_at"] = ahora - 10
 
@@ -261,10 +260,10 @@ def procesar_nuevas_posiciones(detecciones):
                 "updated_at": ahora
             }
 
-    # Mantener unidades hasta 6 minutos (360s) para mostrar "Señal débil" y "+3 min posible avería"
+    # Mantener unidades hasta 7 minutos (420s) para mostrar "Señal débil" y "+4 min posible avería"
     ESTADO_GLOBAL["buses"] = {
         k: v for k, v in ESTADO_GLOBAL["buses"].items()
-        if ahora - v["last_gps_at"] < 360
+        if ahora - v["last_gps_at"] < 420
     }
 
 def recolector_fondo():
@@ -307,6 +306,19 @@ def recolector_fondo():
         time.sleep(9)
 
 Thread(target=recolector_fondo, daemon=True).start()
+
+@app.route('/foto_perfil')
+def foto_perfil():
+    """Busca tu foto subida a GitHub (perfil.jpg, perfil.png, etc.) y la muestra en la web."""
+    nombres_posibles = [
+        "perfil.jpg", "perfil.png", "perfil.jpeg", "perfil.webp",
+        "Perfil.jpg", "Perfil.png", "foto.jpg", "foto.png"
+    ]
+    for nombre in nombres_posibles:
+        ruta = os.path.join(BASE_DIR, nombre)
+        if os.path.isfile(ruta):
+            return send_file(ruta)
+    return ("", 404)
 
 @app.route('/api/parada')
 def api_parada():
@@ -375,11 +387,13 @@ HTML_COMPLETO = """
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: #181825; color: #CDD6F4; padding: 16px 14px 95px; }
-    header { margin-bottom: 12px; }
+    body { background-color: #181825; color: #CDD6F4; padding: 16px 14px 98px; max-width: 980px; margin: 0 auto; }
+    header { margin-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px; }
     h1 { font-size: 22px; color: #89B4FA; font-weight: 800; }
     .sub { font-size: 13px; color: #A6ADC8; margin-top: 2px; }
-    #map-container { position: relative; margin-bottom: 16px; border-radius: 14px; overflow: hidden; border: 1px solid #313244; }
+    .badge-beta { background: rgba(249, 226, 175, 0.12); color: #F9E2AF; border: 1px solid rgba(249, 226, 175, 0.4); font-size: 10px; font-weight: 800; padding: 4px 8px; border-radius: 6px; letter-spacing: 0.4px; text-transform: uppercase; }
+
+    #map-container { position: relative; margin-bottom: 18px; border-radius: 14px; overflow: hidden; border: 1px solid #313244; box-shadow: 0 4px 20px rgba(0,0,0,0.35); }
     #map { height: 460px; width: 100%; background: #11111B; }
     .map-badge { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(24, 24, 37, 0.92); backdrop-filter: blur(6px); padding: 6px 12px; border-radius: 8px; font-size: 12px; color: #CDD6F4; border: 1px solid #313244; font-weight: 700; }
     .map-controls { position: absolute; bottom: 10px; right: 10px; z-index: 1000; display: flex; gap: 6px; }
@@ -410,12 +424,113 @@ HTML_COMPLETO = """
     .stop-popup-desc { font-size: 11px; color: #555; margin-bottom: 6px; }
     .btn-query-stop { background: #1E1E2E; color: #CDD6F4; border: 1px solid #45475A; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; margin: 2px; }
     .result-box { margin-top: 6px; padding-top: 4px; border-top: 1px solid #ccc; font-size: 11px; color: #111; }
+
+    /* Sección Posdata / Acerca de la app (abajo del todo, discreta y prolija) */
+    .about-card {
+      background: #1E1E2E;
+      border: 1px solid #313244;
+      border-radius: 14px;
+      padding: 16px;
+      margin-top: 8px;
+      color: #BAC2DE;
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+    .about-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: #89B4FA;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .about-text {
+      color: #A6ADC8;
+      margin-bottom: 10px;
+    }
+    .beta-notice {
+      background: rgba(249, 226, 175, 0.07);
+      border-left: 3px solid #F9E2AF;
+      padding: 8px 10px;
+      border-radius: 4px 8px 8px 4px;
+      font-size: 11.5px;
+      color: #CBD2EB;
+      margin-bottom: 14px;
+    }
+    .author-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #313244;
+    }
+    .author-info {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+    }
+    .author-avatar-wrap {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      overflow: hidden;
+      border: 2px solid #89B4FA;
+      background: #313244;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .author-avatar {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .author-initials {
+      font-size: 14px;
+      font-weight: 800;
+      color: #89B4FA;
+      display: none;
+    }
+    .author-name {
+      font-size: 13.5px;
+      font-weight: 800;
+      color: #CDD6F4;
+    }
+    .author-role {
+      font-size: 11.5px;
+      color: #9399B2;
+    }
+    .contact-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #313244;
+      color: #A6E3A1;
+      border: 1px solid #45475A;
+      padding: 7px 12px;
+      border-radius: 9px;
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: background 0.15s ease;
+    }
+    .contact-btn:hover {
+      background: #45475A;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>Transporte Plottier</h1>
-    <p class="sub">GPS en vivo y predicción continua (50A, 50B, 50R, 51 Urbano y 52)</p>
+    <div>
+      <h1>Transporte Plottier</h1>
+      <p class="sub">GPS en vivo y predicción continua (50A, 50B, 50R, 51 Urbano y 52)</p>
+    </div>
+    <span class="badge-beta">Versión Beta</span>
   </header>
 
   <div id="map-container">
@@ -427,6 +542,34 @@ HTML_COMPLETO = """
     <div id="map"></div>
   </div>
 
+  <!-- Posdata / Nota del desarrollador -->
+  <section class="about-card">
+    <div class="about-title">💡 P.D. · Proyecto libre y comunitario</div>
+    <p class="about-text">
+      Esta es una aplicación libre y gratuita pensada para los vecinos de <strong>Plottier</strong> y el público en general.
+      Surgió originalmente como una herramienta para mi familia ante la falta de una forma práctica de ver los colectivos y sus recorridos en tiempo real, y decidí abrirla a la comunidad. Cada quien es totalmente libre de usarla y compartirla con quien guste.
+    </p>
+    <div class="beta-notice">
+      ⚠️ <strong>Aviso importante:</strong> La aplicación se encuentra en fase <strong>Beta y en constante desarrollo</strong>. Las ubicaciones en movimiento y los tiempos son estimaciones basadas en los reportes del sistema, por lo que pueden existir demoras o errores y los datos deben tomarse de forma orientativa.
+    </div>
+    <div class="author-row">
+      <div class="author-info">
+        <div class="author-avatar-wrap">
+          <img src="/foto_perfil" alt="Ramiro Alzogaray" class="author-avatar"
+               onerror="this.style.display='none'; document.getElementById('avatar-fallback').style.display='block';">
+          <span id="avatar-fallback" class="author-initials">RA</span>
+        </div>
+        <div>
+          <div class="author-name">Ramiro Alzogaray</div>
+          <div class="author-role">Desarrollador · Plottier, Neuquén</div>
+        </div>
+      </div>
+      <a class="contact-btn" href="https://wa.me/5492994601098" target="_blank" rel="noopener noreferrer" title="Enviar sugerencia o reportar un error">
+        💬 Sugerencias / Errores: 299 460-1098
+      </a>
+    </div>
+  </section>
+
   <div class="bar-fixed">
     <button id="btn" class="btn-refresh" onclick="pedirDatos()">Actualizar</button>
     <div class="status-text" id="status">Sincronizando...</div>
@@ -435,11 +578,13 @@ HTML_COMPLETO = """
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     let map, capaRuta, capaParadas;
-    let busesSim = {}; // id -> estado físico y marcador en tiempo real
+    let busesSim = {};
     let RUTAS_GEO = {};
     let RUTAS_DENSAS = {};
     let PARADAS_LISTA = [];
     let mostrandoParadas = true;
+
+    const LIMITE_AVERIA_SEG = 240; // 4 minutos (240 segundos)
 
     // Semáforos reales del corredor Plottier - Ruta 22 - Av. Mosconi - Neuquén
     const SEMAFOROS = [
@@ -471,7 +616,6 @@ HTML_COMPLETO = """
       return Math.sqrt(dLat * dLat + dLon * dLon);
     }
 
-    // Subdividir polilíneas cada 20 metros para que el seguimiento de ruta sea suave y exacto
     function densificarPolilinea(pts) {
       if (!pts || pts.length < 2) return pts || [];
       const res = [pts[0]];
@@ -508,7 +652,6 @@ HTML_COMPLETO = """
         const idP = p[0], latP = p[1], lonP = p[2], descP = p[3], lineasP = p[4];
         if (!lineasP || !lineasP[bus.linea]) continue;
 
-        // Filtrar paradas que estén hacia adelante según el sentido de avance
         const deltaLon = lonP - bus.simLon;
         if (haciaNqn && deltaLon < -0.0005) continue;
         if (!haciaNqn && deltaLon > 0.0005) continue;
@@ -558,7 +701,7 @@ HTML_COMPLETO = """
         const id = p[0], lat = p[1], lon = p[2], desc = p[3], lineas = p[4];
         let botones = '';
         for (const [linNom, info] of Object.entries(lineas)) {
-          botones += `<button class="btn-query-stop" onclick="consultarParada('${info.parada}', '${info.cod}', '${linNom}')">⏱️️ ${linNom}</button>`;
+          botones += `<button class="btn-query-stop" onclick="consultarParada('${info.parada}', '${info.cod}', '${linNom}')">⏱ ${linNom}</button>`;
         }
 
         const marker = L.circleMarker([lat, lon], {
@@ -607,12 +750,12 @@ HTML_COMPLETO = """
       let estadoHTML = '';
 
       if (bus.cabecera && bus.edad_senal > 45) {
-        estadoHTML = `<div style="color:#F9E2AF; font-weight:700; margin-top:4px;">⏸️ En ${bus.cabecera}<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad aguardando horario de salida</span></div>`;
-      } else if (bus.edad_senal > 180) {
+        estadoHTML = `<div style="color:#b7950b; font-weight:700; margin-top:4px;">⏸️ En ${bus.cabecera}<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad aguardando horario de salida</span></div>`;
+      } else if (bus.edad_senal > LIMITE_AVERIA_SEG) {
         const minSin = Math.floor(bus.edad_senal / 60);
         estadoHTML = `<div style="color:#c0392b; font-weight:700; margin-top:4px;">🚨 Sin señal (${minSin} min)<br><span style="font-weight:normal; font-size:11px; color:#555;">Posible unidad averiada o detenida</span></div>`;
       } else if (bus.edad_senal >= 45) {
-        estadoHTML = `<div style="color:#d35400; font-weight:700; margin-top:4px;">⚠️ Señal débil (hace ${bus.edad_senal}s)<br><span style="font-weight:normal; font-size:11px; color:#555;">Avance estimado sobre el recorrido</span></div>`;
+        estadoHTML = `<div style="color:#d35400; font-weight:700; margin-top:4px;">⚠️ Señal débil (hace ${Math.round(bus.edad_senal)}s)<br><span style="font-weight:normal; font-size:11px; color:#555;">Avance estimado sobre el recorrido</span></div>`;
       } else if (bus.enSemaforo) {
         estadoHTML = `<div style="color:#e67e22; font-weight:700; margin-top:4px;">🚦 Detenido en semáforo</div>`;
       } else {
@@ -651,7 +794,7 @@ HTML_COMPLETO = """
       if (bus.cabecera && bus.edad_senal > 45) {
         estadoClase = "bus-cabecera";
         iconoPrefijo = "⏸️";
-      } else if (bus.edad_senal > 180) {
+      } else if (bus.edad_senal > LIMITE_AVERIA_SEG) {
         estadoClase = "bus-stalled";
         iconoPrefijo = "🚨";
       } else if (bus.edad_senal >= 45) {
@@ -676,11 +819,10 @@ HTML_COMPLETO = """
       for (const id in busesSim) {
         const b = busesSim[id];
 
-        // Incrementar suavemente la edad de señal entre consultas
         b.edad_senal += dt;
 
-        // 1. Si está en cabecera sin señal o supera los 3 minutos sin señal, no avanza
-        if ((b.cabecera && b.edad_senal > 45) || b.edad_senal > 180) {
+        // 1. Si está en cabecera sin señal o supera los 4 minutos (240s) sin señal, no avanza
+        if ((b.cabecera && b.edad_senal > 45) || b.edad_senal > LIMITE_AVERIA_SEG) {
           continue;
         }
 
@@ -697,7 +839,6 @@ HTML_COMPLETO = """
           if (distMts(b.simLat, b.simLon, sem[0], sem[1]) < 20) {
             if (b.ultimoSemaforoIdx !== s) {
               b.ultimoSemaforoIdx = s;
-              // 45% de probabilidad de encontrar el semáforo en rojo (pausa de 7 a 13 seg)
               if (Math.random() < 0.45) {
                 b.pausaHastaMs = ahoraMs + (7000 + Math.random() * 6000);
                 b.enSemaforo = true;
@@ -720,7 +861,6 @@ HTML_COMPLETO = """
         b.enDesvioMosconi = (b.simLon > -68.088 && infoCercana.dist > 45);
 
         if (traza.length > 1 && !b.enDesvioMosconi && infoCercana.dist < 180) {
-          // Seguir la polilínea real del recorrido punto por punto
           let idx = infoCercana.index;
           while (avanceMts > 0 && idx < traza.length - 1) {
             const sig = traza[idx + 1];
@@ -738,13 +878,11 @@ HTML_COMPLETO = """
             }
           }
         } else {
-          // En zona de desvío de Mosconi (post-Jumbo), avanzar por la grilla de calles paralelas
           const dirLon = b.sentido_code === "HACIA_NEUQUEN" ? 1 : -1;
           const dLonGrados = (avanceMts / (111139 * 0.777)) * dirLon;
           b.simLon += dLonGrados;
         }
 
-        // Corrección suave hacia el último punto GPS real si acaba de actualizarse
         if (b.edad_senal < 12) {
           const err = distMts(b.simLat, b.simLon, b.gpsLat, b.gpsLon);
           if (err > 15 && err < 600) {
@@ -802,7 +940,7 @@ HTML_COMPLETO = """
 
     function sincronizarBuses(buses) {
       const label = document.getElementById('bus-count');
-      const enVivo = buses.filter(b => b.edad_senal <= 180).length;
+      const enVivo = buses.filter(b => b.edad_senal <= LIMITE_AVERIA_SEG).length;
       label.innerText = buses.length > 0
         ? `🚌 ${enVivo} activos en recorrido (${buses.length} en radar)`
         : "Buscando unidades en recorrido...";
@@ -825,10 +963,8 @@ HTML_COMPLETO = """
           sim.cabecera = b.cabecera;
           sim.edad_senal = b.edad_senal;
 
-          // Si llegó un paquete GPS nuevo y el colectivo ya cruzó el semáforo, liberar pausa
           if (saltoGps > 25) {
             sim.pausaHastaMs = 0;
-            // Si la diferencia con la simulación es grande, reacomodar suavemente
             if (distMts(sim.simLat, sim.simLon, b.lat, b.lon) > 220) {
               sim.simLat = b.lat;
               sim.simLon = b.lon;
