@@ -369,8 +369,23 @@ def ruta_cron_ok():
     html_minimo = "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body style='background:#fff;color:#000;font-family:sans-serif;margin:8px;'>ok</body></html>"
     return Response(html_minimo, status=200, mimetype='text/html')
 
+@app.route('/logo.png')
+@app.route('/favicon.ico')
+def logo_sitio():
+    """Sirve el logotipo subido a GitHub (logo.png, logo.jpg, etc.) para WhatsApp, Google y pestaña."""
+    nombres_logo = [
+        "logo.png", "logo.jpg", "logo.jpeg", "logo.webp", "logo.ico",
+        "Logo.png", "Logo.jpg", "icono.png", "icono.jpg"
+    ]
+    for nombre in nombres_logo:
+        ruta = os.path.join(BASE_DIR, nombre)
+        if os.path.isfile(ruta):
+            return send_file(ruta)
+    return ("", 404)
+
 @app.route('/foto_perfil')
 def foto_perfil():
+    """Sirve la foto de perfil subida a GitHub (perfil.jpg, perfil.png, etc.)."""
     nombres_posibles = [
         "perfil.jpg", "perfil.png", "perfil.jpeg", "perfil.webp",
         "Perfil.jpg", "Perfil.png", "foto.jpg", "foto.png"
@@ -453,7 +468,10 @@ def api_static_data():
 
 @app.route('/')
 def home():
-    return render_template_string(HTML_COMPLETO)
+    base_url = request.host_url.rstrip('/')
+    if base_url.startswith("http://") and "localhost" not in base_url and "127.0.0.1" not in base_url:
+        base_url = base_url.replace("http://", "https://", 1)
+    return render_template_string(HTML_COMPLETO, base_url=base_url)
 
 HTML_COMPLETO = """
 <!DOCTYPE html>
@@ -461,7 +479,28 @@ HTML_COMPLETO = """
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Transporte Plottier - En Vivo</title>
+  <title>Transporte Plottier - Colectivos en Vivo</title>
+
+  <!-- Iconos para Google Search, pestaña del navegador y pantalla de inicio en celulares -->
+  <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/logo.png">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/logo.png">
+
+  <!-- Meta etiquetas Open Graph para vista previa al compartir en WhatsApp y redes -->
+  <meta name="description" content="Ubicación GPS en vivo y horarios oficiales de las líneas 50A, 50B, 50R, 51 Urbano y 52 en Plottier y Neuquén.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Transporte Plottier">
+  <meta property="og:title" content="Transporte Plottier - Colectivos en Vivo">
+  <meta property="og:description" content="Seguimiento GPS en tiempo real y planillas de horarios oficiales (50A, 50B, 50R, 51 Urbano y 52).">
+  <meta property="og:url" content="{{ base_url }}/">
+  <meta property="og:image" content="{{ base_url }}/logo.png">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Transporte Plottier - Colectivos en Vivo">
+  <meta name="twitter:description" content="GPS en vivo y planillas oficiales de colectivos en Plottier y Neuquén.">
+  <meta name="twitter:image" content="{{ base_url }}/logo.png">
 
   <!-- Google tag (gtag.js) - Google Analytics -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-CE85R9NET5"></script>
@@ -476,7 +515,9 @@ HTML_COMPLETO = """
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background-color: #181825; color: #CDD6F4; padding: 16px 14px 98px; max-width: 980px; margin: 0 auto; }
-    header { margin-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px; }
+    header { margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .brand-wrap { display: flex; align-items: center; gap: 10px; }
+    .brand-logo { width: 38px; height: 38px; border-radius: 9px; object-fit: cover; border: 1px solid #313244; flex-shrink: 0; }
     h1 { font-size: 22px; color: #89B4FA; font-weight: 800; }
     .sub { font-size: 13px; color: #A6ADC8; margin-top: 2px; }
     .badge-beta { background: rgba(249, 226, 175, 0.12); color: #F9E2AF; border: 1px solid rgba(249, 226, 175, 0.4); font-size: 10px; font-weight: 800; padding: 4px 8px; border-radius: 6px; letter-spacing: 0.4px; text-transform: uppercase; }
@@ -801,9 +842,12 @@ HTML_COMPLETO = """
 </head>
 <body>
   <header>
-    <div>
-      <h1>Transporte Plottier</h1>
-      <p class="sub">GPS en vivo y planillas oficiales (50A, 50B, 50R, 51 Urbano y 52)</p>
+    <div class="brand-wrap">
+      <img src="/logo.png" alt="Logo" class="brand-logo" onerror="this.style.display='none';">
+      <div>
+        <h1>Transporte Plottier</h1>
+        <p class="sub">GPS en vivo y planillas oficiales (50A, 50B, 50R, 51 Urbano y 52)</p>
+      </div>
     </div>
     <span class="badge-beta">Versión Beta</span>
   </header>
@@ -1405,7 +1449,6 @@ HTML_COMPLETO = """
 
         for (let i = 0; i < paradasRuta.length; i++) {
           const pc = paradasRuta[i];
-          // Para la cabecera de salida (índice 0), solo considerarla si es el destino final
           if (i === 0 && paradasRuta.length > 1) continue;
           const posStop = encontrarIndiceMasCercano(pc.lat, pc.lon, traza);
           if (posStop.index > posBus.index + 2 && posStop.index < mejorIdxStop) {
@@ -1415,7 +1458,6 @@ HTML_COMPLETO = """
         }
 
         if (mejorParada) {
-          // Medir la distancia real siguiendo las calles de la traza
           let distRecorridoMts = 0;
           for (let k = posBus.index; k < mejorIdxStop; k++) {
             distRecorridoMts += distMts(traza[k][0], traza[k][1], traza[k + 1][0], traza[k + 1][1]);
@@ -1426,7 +1468,6 @@ HTML_COMPLETO = """
         }
       }
 
-      // Respaldo geométrico hacia adelante si la unidad va por desvío o fuera de traza
       const haciaNqn = bus.sentido_code === "HACIA_NEUQUEN";
       let mejorParadaFallback = null;
       let menorDist = Infinity;
@@ -1602,7 +1643,7 @@ HTML_COMPLETO = """
       let estadoHTML = '';
 
       if (bus.cabecera && bus.edad_senal >= LIMITE_DEBIL_SEG) {
-        estadoHTML = `<div style="color:#b7950b; font-weight:700; margin-top:4px;">⏸️ En ${bus.cabecera}<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad aguardando horario de salida</span></div>`;
+        estadoHTML = `<div style="color:#b7950b; font-weight:700; margin-top:4px;">⏸️️ En ${bus.cabecera}<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad aguardando horario de salida</span></div>`;
       } else if (bus.edad_senal > LIMITE_AVERIA_SEG) {
         const minSin = Math.floor(bus.edad_senal / 60);
         estadoHTML = `<div style="color:#c0392b; font-weight:700; margin-top:4px;">🚨 Sin señal (${minSin} min)<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad detenida hasta recuperar señal</span></div>`;
@@ -1837,7 +1878,6 @@ HTML_COMPLETO = """
             sim.marker.setIcon(construirIcono(sim));
           }
 
-          // Actualizar contenido sin usar .off('click') para no romper la apertura en móviles
           if (sim.marker.isPopupOpen()) {
             sim.marker.getPopup().setContent(generarHTMLPopup(sim));
           }
