@@ -92,19 +92,19 @@ PARADAS_CLUSTERIZADAS = agrupar_paradas(PARADAS_RAW)
 
 URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
 
-# Paradas exclusivas de cada sentido para no duplicar IDA/VUELTA en el bucle de cabecera
+# Paradas exclusivas de cada sentido para el radar
 PARADAS_RADAR = [
-    ("NV4120", "1013", "50A"),      # 50A exclusivo IDA (llegando a Neuquén)
-    ("NV1012", "1013", "50A"),      # 50A exclusivo IDA (Ruta 22)
-    ("NV8039", "1013", "50A"),      # 50A exclusivo VUELTA (Av. San Martín Plottier)
-    ("NV1027", "1013", "50A"),      # 50A exclusivo VUELTA (Ruta 22 hacia Plottier)
-    ("NV4120", "1014", "50B"),      # 50B exclusivo IDA (llegando a Neuquén)
-    ("NV1012", "1014", "50B"),      # 50B exclusivo IDA (Ruta 22)
-    ("NV1173", "1014", "50B"),      # 50B exclusivo VUELTA (Av. del Trabajo Plottier)
-    ("NV1027", "1014", "50B"),      # 50B exclusivo VUELTA (Ruta 22 hacia Plottier)
-    ("NV 4998", "1015", "50R"),     # 50R exclusivo IDA (Neuquén)
-    ("NV6001", "1015", "50R"),      # 50R exclusivo VUELTA (Las Perlas)
-    ("NV5019", "1015", "50R"),      # 50R Plottier
+    ("NV4120", "1013", "50A"),
+    ("NV1012", "1013", "50A"),
+    ("NV8039", "1013", "50A"),
+    ("NV1027", "1013", "50A"),
+    ("NV4120", "1014", "50B"),
+    ("NV1012", "1014", "50B"),
+    ("NV1173", "1014", "50B"),
+    ("NV1027", "1014", "50B"),
+    ("NV 4998", "1015", "50R"),
+    ("NV6001", "1015", "50R"),
+    ("NV5019", "1015", "50R"),
     ("NV8064", "1109", "URBANO"),
     ("51 00001", "1109", "URBANO"),
     ("5200001", "1079", "52 CENTRO"),
@@ -150,15 +150,10 @@ def normalizar_linea(linea_raw):
     return lin
 
 def extraer_minutos(tiempo_str):
-    """Extrae los minutos numéricos de un texto como '21 min. aprox.' para priorizar el viaje actual."""
     m = re.search(r'(\d+)', str(tiempo_str or ""))
     return int(m.group(1)) if m else 999
 
 def filtrar_arribos_unicos(arribos, linea):
-    """
-    Si una parada compartida devuelve el mismo colectivo dos veces (ej. primero como VUELTA en 20 min
-    y luego como IDA en 38 min), conserva únicamente el viaje actual (el de menor tiempo).
-    """
     ordenados = sorted(arribos, key=lambda a: extraer_minutos(a.get("tiempo") or a.get("tiempo_arribo")))
     unicos = []
     for a in ordenados:
@@ -179,7 +174,6 @@ def filtrar_arribos_unicos(arribos, linea):
     return unicos
 
 def deducir_sentido_bandera(ramal_raw):
-    """Deduce el sentido únicamente si el nombre de la bandera indica explícitamente IDA o VUELTA."""
     txt = str(ramal_raw or "").upper()
     if "VUELTA" in txt or "VTA" in txt:
         return "Hacia Plottier", "HACIA_PLOTTIER"
@@ -188,7 +182,6 @@ def deducir_sentido_bandera(ramal_raw):
     return None, None
 
 def deducir_sentido_geometria(linea, lat, lon):
-    """Compara a qué traza (HACIA_NEUQUEN o HACIA_PLOTTIER) está físicamente más cerca la unidad."""
     if linea not in TRAZAS_GEO:
         return None, None, 99, 99
     pts_nqn = TRAZAS_GEO[linea].get("HACIA_NEUQUEN", [])
@@ -231,11 +224,9 @@ def procesar_nuevas_posiciones(detecciones):
             delta_lon = lon - bus["lon"]
             dt = max(ahora - bus["last_gps_at"], 1.0)
 
-            # 1. Si el colectivo está en un tramo exclusivo de una traza (ej. Autovía vs Av. del Trabajo), manda la traza
             if abs(d_nqn - d_plo) > 0.08:
                 sentido = sentido_geo
                 sentido_code = code_geo
-            # 2. Si se desplazó más de 25 metros en sentido Este-Oeste, manda el movimiento físico real del GPS
             elif abs(delta_lon) > 0.0003:
                 if delta_lon < 0:
                     sentido = "Hacia Plottier"
@@ -243,7 +234,6 @@ def procesar_nuevas_posiciones(detecciones):
                 else:
                     sentido = "Hacia Neuquén"
                     sentido_code = "HACIA_NEUQUEN"
-            # 3. Si no se movió lo suficiente aún, usar bandera explícita o mantener el actual
             elif sentido_bandera:
                 sentido = sentido_bandera
                 sentido_code = code_bandera
@@ -267,7 +257,6 @@ def procesar_nuevas_posiciones(detecciones):
                     bus["last_gps_at"] = max(bus["last_gps_at"], ahora - 25)
 
             ramal_actual = d.get("ramal") or bus.get("ramal") or f"Línea {linea}"
-            # Ajustar nombre de ramal si había quedado invertido por parada compartida
             if sentido_code == "HACIA_PLOTTIER" and "IDA" in str(ramal_actual).upper():
                 ramal_actual = str(ramal_actual).replace("IDA", "VUELTA")
             elif sentido_code == "HACIA_NEUQUEN" and "VUELTA" in str(ramal_actual).upper():
@@ -310,14 +299,12 @@ def procesar_nuevas_posiciones(detecciones):
                 "updated_at": ahora
             }
 
-    # Mantener unidades hasta 8 minutos (480s)
     ESTADO_GLOBAL["buses"] = {
         k: v for k, v in ESTADO_GLOBAL["buses"].items()
         if ahora - v["last_gps_at"] < 480
     }
 
 def ejecutar_paso_radar(cantidad_paradas=5):
-    """Ejecuta un barrido de arribos de colectivos (usado por el hilo de fondo y por /ok)."""
     global ESTADO_GLOBAL
     if not RADAR_LOCK.acquire(blocking=False):
         return
@@ -367,11 +354,6 @@ Thread(target=recolector_fondo, daemon=True).start()
 @app.route('/cron')
 @app.route('/ping')
 def ruta_cron_ok():
-    """
-    Ventana ultraliviana para Cron-Job:
-    Dispara en segundo plano la consulta de arribos de todos los colectivos como un usuario normal
-    y devuelve una página blanca mínima que dice 'ok' (sin Google Analytics para no inflar métricas).
-    """
     if time.time() - ESTADO_GLOBAL.get("ultimo_escaneo", 0) > 4:
         Thread(target=ejecutar_paso_radar, args=(8,), daemon=True).start()
     html_minimo = "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body style='background:#fff;color:#000;font-family:sans-serif;margin:8px;'>ok</body></html>"
@@ -379,7 +361,6 @@ def ruta_cron_ok():
 
 @app.route('/foto_perfil')
 def foto_perfil():
-    """Busca tu foto subida a GitHub (perfil.jpg, perfil.png, etc.) y la muestra en la web."""
     nombres_posibles = [
         "perfil.jpg", "perfil.png", "perfil.jpeg", "perfil.webp",
         "Perfil.jpg", "Perfil.png", "foto.jpg", "foto.png"
@@ -470,7 +451,7 @@ HTML_COMPLETO = """
     .sub { font-size: 13px; color: #A6ADC8; margin-top: 2px; }
     .badge-beta { background: rgba(249, 226, 175, 0.12); color: #F9E2AF; border: 1px solid rgba(249, 226, 175, 0.4); font-size: 10px; font-weight: 800; padding: 4px 8px; border-radius: 6px; letter-spacing: 0.4px; text-transform: uppercase; }
 
-    #map-container { position: relative; margin-bottom: 18px; border-radius: 14px; overflow: hidden; border: 1px solid #313244; box-shadow: 0 4px 20px rgba(0,0,0,0.35); }
+    #map-container { position: relative; margin-bottom: 16px; border-radius: 14px; overflow: hidden; border: 1px solid #313244; box-shadow: 0 4px 20px rgba(0,0,0,0.35); }
     #map { height: 460px; width: 100%; background: #11111B; }
     .map-badge { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(24, 24, 37, 0.92); backdrop-filter: blur(6px); padding: 6px 12px; border-radius: 8px; font-size: 12px; color: #CDD6F4; border: 1px solid #313244; font-weight: 700; }
     .map-controls { position: absolute; bottom: 10px; right: 10px; z-index: 1000; display: flex; gap: 6px; }
@@ -487,7 +468,7 @@ HTML_COMPLETO = """
     .bus-marker-urbano { background: #3E3724; border: 2px solid #F9E2AF; color: #F9E2AF; }
     .bus-marker-52 { background: #3E2824; border: 2px solid #FAB387; color: #FAB387; }
 
-    /* Solo titila cuando lleva entre 3 y 4 minutos sin señal */
+    /* Solo titila entre 3 y 4 minutos sin señal */
     .bus-weak { border-style: dashed !important; border-color: #F9E2AF !important; animation: pulseWeak 1.6s infinite; }
     /* Más de 4 minutos sin señal: detenido hasta recuperar */
     .bus-stalled { background: #3B1D26 !important; border-color: #F38BA8 !important; color: #F38BA8 !important; opacity: 0.88; }
@@ -503,13 +484,104 @@ HTML_COMPLETO = """
     .btn-query-stop { background: #1E1E2E; color: #CDD6F4; border: 1px solid #45475A; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; margin: 2px; }
     .result-box { margin-top: 6px; padding-top: 4px; border-top: 1px solid #ccc; font-size: 11px; color: #111; }
 
+    /* Sección de Planillas y Horarios Oficiales */
+    .sched-card {
+      background: #1E1E2E;
+      border: 1px solid #313244;
+      border-radius: 14px;
+      padding: 14px 16px;
+      margin-bottom: 14px;
+    }
+    .sched-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .sched-header-title {
+      font-size: 13.5px;
+      font-weight: 800;
+      color: #89B4FA;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .sched-header-btn {
+      background: #313244;
+      color: #CDD6F4;
+      border: 1px solid #45475A;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 9px;
+      border-radius: 7px;
+    }
+    .sched-content {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #313244;
+      display: none;
+    }
+    .sched-tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .sched-tab {
+      background: #252739;
+      color: #A6ADC8;
+      border: 1px solid #45475A;
+      padding: 5px 11px;
+      border-radius: 8px;
+      font-size: 11.5px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .sched-tab.active {
+      background: #89B4FA;
+      color: #11111B;
+      border-color: #89B4FA;
+    }
+    .table-responsive {
+      max-height: 320px;
+      overflow: auto;
+      border-radius: 8px;
+      border: 1px solid #313244;
+    }
+    table.sched-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      text-align: center;
+      background: #181825;
+      color: #CDD6F4;
+    }
+    table.sched-table th {
+      background: #1E1E2E;
+      color: #89B4FA;
+      padding: 8px 6px;
+      font-weight: 800;
+      position: sticky;
+      top: 0;
+      border-bottom: 1px solid #313244;
+      white-space: nowrap;
+    }
+    table.sched-table td {
+      padding: 6px 5px;
+      border-bottom: 1px solid #262738;
+      white-space: nowrap;
+    }
+    table.sched-table tr:hover td {
+      background: #252739;
+    }
+
     /* Sección Posdata / Acerca de la app */
     .about-card {
       background: #1E1E2E;
       border: 1px solid #313244;
       border-radius: 14px;
       padding: 16px;
-      margin-top: 8px;
       color: #BAC2DE;
       font-size: 12.5px;
       line-height: 1.55;
@@ -606,7 +678,7 @@ HTML_COMPLETO = """
   <header>
     <div>
       <h1>Transporte Plottier</h1>
-      <p class="sub">GPS en vivo y predicción continua (50A, 50B, 50R, 51 Urbano y 52)</p>
+      <p class="sub">GPS en vivo y planillas oficiales (50A, 50B, 50R, 51 Urbano y 52)</p>
     </div>
     <span class="badge-beta">Versión Beta</span>
   </header>
@@ -619,6 +691,23 @@ HTML_COMPLETO = """
     </div>
     <div id="map"></div>
   </div>
+
+  <!-- Desplegable de Planillas de Horarios Oficiales -->
+  <section class="sched-card">
+    <div class="sched-header" onclick="togglePlanillas()">
+      <div class="sched-header-title">📅 Horarios Oficiales Fin de Semana (50A y 50B)</div>
+      <button class="sched-header-btn" id="btn-sched-toggle">Ver Planilla ▾</button>
+    </div>
+    <div class="sched-content" id="sched-panel">
+      <div class="sched-tabs">
+        <button class="sched-tab active" onclick="mostrarPlanilla('50A_SAB')">50A Sábado</button>
+        <button class="sched-tab" onclick="mostrarPlanilla('50A_DOM')">50A Domingo</button>
+        <button class="sched-tab" onclick="mostrarPlanilla('50B_SAB')">50B Sábado</button>
+        <button class="sched-tab" onclick="mostrarPlanilla('50B_DOM')">50B Domingo</button>
+      </div>
+      <div class="table-responsive" id="sched-table-box"></div>
+    </div>
+  </section>
 
   <!-- Posdata / Nota del desarrollador -->
   <section class="about-card">
@@ -661,10 +750,163 @@ HTML_COMPLETO = """
     let RUTAS_DENSAS = {};
     let PARADAS_LISTA = [];
     let mostrandoParadas = true;
+    let planillasAbiertas = false;
 
     const LIMITE_DEBIL_SEG = 180;      // 3 minutos (180s) para empezar a titilar como "Señal débil"
     const LIMITE_AVERIA_SEG = 240;     // 4 minutos (240s) para detenerse por pérdida de señal
-    const DIST_MAX_EN_RUTA_MTS = 35;   // Si el colectivo se aleja más de 35m de la ruta, se apaga el 60fps
+    const DIST_MAX_EN_RUTA_MTS = 35;   // Si se aleja más de 35m de la ruta, 60fps se apaga
+
+    // --- BASE DE DATOS DE HORARIOS OFICIALES DE INDALO (FIN DE SEMANA) ---
+    const HORARIOS_OFICIALES = {
+      "50A_SAB": {
+        nombre: "50A Sábado",
+        puntos: ["Loteo Social", "San Martín y Trabajo", "Río Colorado", "San Juan y Bs As (Nqn)", "Río Colorado", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
+        deltas: [0, 12, 17, 37, 37, 12, 17, 12, 12],
+        salidas: ["04:25","05:00","05:45","06:30","07:22","08:07","08:52","09:37","10:10","10:55","11:40","12:25","12:58","13:43","14:28","15:13","15:46","16:31","17:16","18:01","18:34","19:19","20:04","20:49","21:22","22:07","22:52","23:37"]
+      },
+      "50A_DOM": {
+        nombre: "50A Domingo",
+        puntos: ["Loteo Social", "San Martín y Trabajo", "Río Colorado", "San Juan y Bs As (Nqn)", "Río Colorado", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
+        deltas: [0, 12, 17, 30, 30, 15, 15, 15, 12],
+        salidas: ["05:30","06:10","06:50","08:40","09:30","10:20","11:19","12:09","12:59","13:58","14:48","15:38","16:37","17:27","18:17","19:16","20:06","20:56","21:55","22:45","23:35"]
+      },
+      "50B_SAB": {
+        nombre: "50B Sábado",
+        puntos: ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado", "San Juan y Bs As (Nqn)", "Río Colorado", "San Martín y Trabajo", "Loteo Social"],
+        deltas: [0, 15, 15, 20, 37, 37, 20, 12],
+        salidas: ["04:30","05:15","06:00","06:45","06:44","07:29","08:14","08:59","09:32","10:17","11:02","11:47","12:20","13:05","13:50","14:35","15:08","15:53","16:38","17:23","17:56","18:41","19:26","20:11","20:44","21:29","22:14","22:59"]
+      },
+      "50B_DOM": {
+        nombre: "50B Domingo",
+        puntos: ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado", "San Juan y Bs As (Nqn)", "Río Colorado", "San Martín y Trabajo", "Loteo Social"],
+        deltas: [0, 13, 13, 20, 35, 35, 20, 10],
+        salidas: ["05:40","06:20","07:00","07:52","08:46","09:36","10:31","11:25","12:15","13:10","14:04","14:54","15:49","16:43","17:33","18:28","19:22","20:12","21:07","22:01","22:51"]
+      }
+    };
+
+    function sumarMinutos(hhmm, mins) {
+      const partes = hhmm.split(':');
+      let mTotal = parseInt(partes[0], 10) * 60 + parseInt(partes[1], 10) + mins;
+      mTotal = (mTotal % 1440 + 1440) % 1440;
+      const h = String(Math.floor(mTotal / 60)).padStart(2, '0');
+      const m = String(mTotal % 60).padStart(2, '0');
+      return `${h}:${m}`;
+    }
+
+    function togglePlanillas() {
+      const p = document.getElementById('sched-panel');
+      const b = document.getElementById('btn-sched-toggle');
+      planillasAbiertas = !planillasAbiertas;
+      if (planillasAbiertas) {
+        p.style.display = 'block';
+        b.innerText = 'Ocultar Planilla ▴';
+        mostrarPlanilla('50A_SAB');
+      } else {
+        p.style.display = 'none';
+        b.innerText = 'Ver Planilla ▾';
+      }
+    }
+
+    function mostrarPlanilla(clave) {
+      document.querySelectorAll('.sched-tab').forEach(t => t.classList.remove('active'));
+      event && event.target && event.target.classList.add('active');
+
+      const data = HORARIOS_OFICIALES[clave];
+      if (!data) return;
+
+      const acum = [];
+      let c = 0;
+      for (let d of data.deltas) { c += d; acum.push(c); }
+
+      let h = `<table class="sched-table"><thead><tr><th>Salida</th>`;
+      data.puntos.forEach(p => { h += `<th>${p}</th>`; });
+      h += `</tr></thead><tbody>`;
+
+      data.salidas.forEach(sal => {
+        h += `<tr><td><strong>${sal}</strong></td>`;
+        acum.forEach(m => {
+          h += `<td>${sumarMinutos(sal, m)}</td>`;
+        });
+        h += `</tr>`;
+      });
+      h += `</tbody></table>`;
+      document.getElementById('sched-table-box').innerHTML = h;
+    }
+
+    // Calcula el offset estimado en minutos desde la salida en cabecera según la parada
+    function estimarOffsetParada(lat, lon, linNom) {
+      // Coordenadas este-oeste del trayecto Plottier (-68.25) -> Neuquén (-68.056)
+      const frac = Math.max(0, Math.min(1, ((-68.249) - lon) / ((-68.249) - (-68.056))));
+      // Detectar si está en la mano norte (IDA a Nqn) o mano sur (VUELTA a Plottier)
+      const enManoIda = (lat > -38.956);
+
+      if (linNom === "50A") {
+        if (enManoIda) {
+          // Loteo Social (0m) -> San Martín (12m) -> Río Colorado (29m) -> Nqn (66m)
+          return Math.round(frac * 66);
+        } else {
+          // Nqn (66m) -> Río Colorado (103m) -> Riavitz (115m) -> Amancay (132m) -> Loteo (156m)
+          return Math.round(66 + (1 - frac) * 85);
+        }
+      } else if (linNom === "50B") {
+        if (!enManoIda) {
+          // Loteo Social (0m) -> Casa Cultura (14m) -> Amancay (28m) -> Río Colorado (48m) -> Nqn (84m)
+          return Math.round(frac * 84);
+        } else {
+          // Nqn (84m) -> Río Colorado (120m) -> San Martín (140m) -> Loteo (156m)
+          return Math.round(84 + (1 - frac) * 68);
+        }
+      }
+      return 0;
+    }
+
+    function calcularProximosHorariosProgramados(lat, lon, linNom) {
+      if (linNom !== "50A" && linNom !== "50B") return null;
+
+      const ahora = new Date();
+      // Obtener hora local de Argentina
+      const horaStr = ahora.toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour12: false });
+      const diaSemana = ahora.getDay(); // 0: Domingo, 6: Sábado
+
+      let clave = null;
+      let etiquetaDia = "";
+      if (diaSemana === 6) {
+        clave = `${linNom}_SAB`;
+        etiquetaDia = "Sábado";
+      } else if (diaSemana === 0) {
+        clave = `${linNom}_DOM`;
+        etiquetaDia = "Domingo";
+      } else {
+        // En días de semana muestra la referencia de sábado aclarando el día
+        clave = `${linNom}_SAB`;
+        etiquetaDia = "Ref. Sábado";
+      }
+
+      const plan = HORARIOS_OFICIALES[clave];
+      if (!plan) return null;
+
+      const offsetMin = estimarOffsetParada(lat, lon, linNom);
+      const partesHora = horaStr.split(':');
+      const minActual = parseInt(partesHora[0], 10) * 60 + parseInt(partesHora[1], 10);
+
+      const proximos = [];
+      for (const sal of plan.salidas) {
+        const partesSal = sal.split(':');
+        const minPaso = (parseInt(partesSal[0], 10) * 60 + parseInt(partesSal[1], 10) + offsetMin) % 1440;
+        let dif = minPaso - minActual;
+        if (dif >= 0 && dif <= 180) { // próximos en las siguientes 3 horas
+          proximos.push({
+            hora: sumarMinutos(sal, offsetMin),
+            enMin: dif
+          });
+        }
+      }
+
+      return {
+        etiquetaDia: etiquetaDia,
+        horarios: proximos.slice(0, 3)
+      };
+    }
 
     // Semáforos reales del corredor Plottier - Ruta 22 - Av. Mosconi - Neuquén
     const SEMAFOROS = [
@@ -723,7 +965,6 @@ HTML_COMPLETO = """
       return { index: minIdx, dist: minDist };
     }
 
-    // Verifica si las coordenadas GPS reales del colectivo están sobre la ruta programada
     function estaEnRutaProgramada(lat, lon, linea, sentidoCode) {
       const traza = (RUTAS_DENSAS[linea] && RUTAS_DENSAS[linea][sentidoCode]) || [];
       if (traza.length < 2) return false;
@@ -731,7 +972,6 @@ HTML_COMPLETO = """
       return info.dist <= DIST_MAX_EN_RUTA_MTS;
     }
 
-    // Animación clásica punto-a-punto (se usa cuando el colectivo se sale del recorrido programado)
     function deslizarMarcador(bus, destLat, destLon) {
       const from = bus.marker.getLatLng();
       const to = L.latLng(destLat, destLon);
@@ -751,7 +991,7 @@ HTML_COMPLETO = """
       const duration = 1200;
 
       function step(timestamp) {
-        if (bus.enRuta) return; // Si volvió a entrar a la ruta, el motor 60fps toma el control
+        if (bus.enRuta) return;
         if (!start) start = timestamp;
         const progress = Math.min((timestamp - start) / duration, 1);
         const lat = from.lat + (to.lat - from.lat) * progress;
@@ -822,7 +1062,7 @@ HTML_COMPLETO = """
         const id = p[0], lat = p[1], lon = p[2], desc = p[3], lineas = p[4];
         let botones = '';
         for (const [linNom, info] of Object.entries(lineas)) {
-          botones += `<button class="btn-query-stop" onclick="consultarParada('${info.parada}', '${info.cod}', '${linNom}')">⏱ ${linNom}</button>`;
+          botones += `<button class="btn-query-stop" onclick="consultarParada('${info.parada}', '${info.cod}', '${linNom}', ${lat}, ${lon})">⏱ ${linNom}</button>`;
         }
 
         const marker = L.circleMarker([lat, lon], {
@@ -830,7 +1070,7 @@ HTML_COMPLETO = """
         });
 
         marker.bindPopup(`
-          <div style="min-width:165px;">
+          <div style="min-width:175px;">
             <div class="stop-popup-title">📍 ${desc}</div>
             <div class="stop-popup-desc">Ref: ${id}</div>
             <div>${botones}</div>
@@ -841,28 +1081,47 @@ HTML_COMPLETO = """
       });
     }
 
-    async function consultarParada(idParada, codLinea, linNom) {
+    async function consultarParada(idParada, codLinea, linNom, lat, lon) {
       const box = document.querySelector('.leaflet-popup-content .result-box');
       if (box) {
         box.style.display = 'block';
         box.innerHTML = `<em>Consultando arribos de ${linNom}...</em>`;
       }
 
+      // 1. Calcular horarios oficiales programados de la planilla de Indalo
+      const prog = calcularProximosHorariosProgramados(lat, lon, linNom);
+      let progHTML = '';
+      if (prog && prog.horarios && prog.horarios.length > 0) {
+        const listaH = prog.horarios.map(h => `<strong>${h.hora}</strong> (${h.enMin} min)`).join(', ');
+        progHTML = `
+          <div style="margin-top:6px; padding-top:5px; border-top:1px dashed #bbb; font-size:10.5px; color:#444;">
+            📅 <strong>Horario programado (${prog.etiquetaDia}):</strong><br>
+            ${listaH}
+          </div>
+        `;
+      }
+
       try {
         const r = await fetch(`/api/parada?id=${encodeURIComponent(idParada)}&cod=${encodeURIComponent(codLinea)}&linea=${encodeURIComponent(linNom)}`);
         const data = await r.json();
         if (!data.arribos || data.arribos.length === 0) {
-          if (box) box.innerHTML = `Sin arribos próximos para ${linNom}.`;
+          if (box) {
+            box.innerHTML = `
+              <div style="color:#666;">Sin unidades en camino detectadas por GPS.</div>
+              ${progHTML}
+            `;
+          }
         } else {
           let h = '';
           data.arribos.forEach(a => {
-            h += `<div style="margin-bottom:3px;"><strong>${a.ramal}</strong> (${a.sentido})<br>Arribo: <span style="color:#27ae60; font-weight:bold;">${a.tiempo}</span></div>`;
+            h += `<div style="margin-bottom:3px;"><strong>${a.ramal}</strong> (${a.sentido})<br>Arribo en vivo: <span style="color:#27ae60; font-weight:bold;">${a.tiempo}</span></div>`;
           });
+          h += progHTML;
           if (box) box.innerHTML = h;
           pedirDatos();
         }
       } catch (e) {
-        if (box) box.innerHTML = 'Error al consultar parada.';
+        if (box) box.innerHTML = `Error al consultar GPS en vivo.<br>${progHTML}`;
       }
     }
 
@@ -936,7 +1195,6 @@ HTML_COMPLETO = """
       });
     }
 
-    // Motor de simulación continua a 60 FPS (solo actúa si el colectivo está dentro de su ruta programada)
     let ultimoFrame = performance.now();
     function loopFisicoContinuo(ahoraMs) {
       const dt = Math.min((ahoraMs - ultimoFrame) / 1000.0, 0.25);
@@ -953,23 +1211,19 @@ HTML_COMPLETO = """
           b.marker.setIcon(construirIcono(b));
         }
 
-        // Si el colectivo se salió de su ruta programada, el seguimiento 60fps queda desactivado
         if (!b.enRuta) {
           b.enSemaforo = false;
           continue;
         }
 
-        // 1. Si está en cabecera sin señal o supera los 4 minutos (240s) sin señal, se detiene
         if ((b.cabecera && b.edad_senal >= LIMITE_DEBIL_SEG) || b.edad_senal > LIMITE_AVERIA_SEG) {
           continue;
         }
 
-        // 2. No adelantar más de 220 metros respecto al último punto GPS real confirmado
         if (distMts(b.simLat, b.simLon, b.gpsLat, b.gpsLon) > 220) {
           continue;
         }
 
-        // 3. Verificar pausa en semáforos
         if (b.pausaHastaMs && ahoraMs < b.pausaHastaMs) {
           b.enSemaforo = true;
           continue;
@@ -992,7 +1246,6 @@ HTML_COMPLETO = """
         }
         if (b.enSemaforo) continue;
 
-        // 4. Avanzar suavemente sobre los puntos de la ruta programada
         const factorSenal = b.edad_senal >= LIMITE_DEBIL_SEG ? 0.60 : 0.85;
         const velMps = ((b.vel_kmh || 32) / 3.6) * factorSenal;
         let avanceMts = velMps * dt;
@@ -1098,11 +1351,9 @@ HTML_COMPLETO = """
           sim.enRuta = dentroDeRuta;
 
           if (!dentroDeRuta) {
-            // Fuera de la ruta programada: usar el deslizamiento clásico hacia el punto GPS real
             deslizarMarcador(sim, b.lat, b.lon);
           } else if (saltoGps > 15) {
             sim.pausaHastaMs = 0;
-            // Sincronizar la posición simulada con el nuevo reporte GPS sobre la ruta
             sim.simLat = b.lat;
             sim.simLon = b.lon;
             sim.marker.setLatLng([b.lat, b.lon]);
