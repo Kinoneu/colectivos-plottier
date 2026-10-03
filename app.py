@@ -5,8 +5,8 @@ import math
 import requests
 from datetime import datetime
 import zoneinfo
-from threading import Thread
-from flask import Flask, jsonify, render_template_string, request, send_file
+from threading import Thread, Lock
+from flask import Flask, jsonify, render_template_string, request, send_file, Response
 
 app = Flask(__name__)
 
@@ -114,8 +114,11 @@ PARADAS_RADAR = [
 ESTADO_GLOBAL = {
     "timestamp": "--:--:--",
     "buses": {},
-    "contador_ids": 1
+    "contador_ids": 1,
+    "idx_radar": 0,
+    "ultimo_escaneo": 0.0
 }
+RADAR_LOCK = Lock()
 
 def distancia_km(lat1, lon1, lat2, lon2):
     d_lat = (lat1 - lat2) * 111.0
@@ -202,7 +205,7 @@ def procesar_nuevas_posiciones(detecciones):
                 sentido = bus["sentido"]
                 sentido_code = bus["sentido_code"]
 
-            # Si el GPS realmente reportó una coordenada distinta (> 12 metros)
+            # Si el GPS realmente reportó una coordenada nueva (> 12 metros)
             if dist_avance > 0.012:
                 vel_calc = (dist_avance / dt) * 3600.0
                 vel_kmh = round(max(18.0, min(vel_calc, 58.0)), 1)
@@ -215,8 +218,9 @@ def procesar_nuevas_posiciones(detecciones):
                     "last_gps_at": ahora
                 })
             else:
-                if ahora - bus["last_gps_at"] < 40:
-                    bus["last_gps_at"] = ahora - 10
+                # Si sigue reportando en el sistema sin cambio de coordenadas aún, mantener señal activa
+                if ahora - bus["last_gps_at"] < 120:
+                    bus["last_gps_at"] = max(bus["last_gps_at"], ahora - 25)
 
             bus.update({
                 "ramal": d.get("ramal") or bus.get("ramal"),
@@ -260,16 +264,19 @@ def procesar_nuevas_posiciones(detecciones):
                 "updated_at": ahora
             }
 
-    # Mantener unidades hasta 7 minutos (420s) para mostrar "Señal débil" y "+4 min posible avería"
+    # Mantener unidades hasta 8 minutos (480s) para cubrir los tramos de +3 min (débil) y +4 min (detenido)
     ESTADO_GLOBAL["buses"] = {
         k: v for k, v in ESTADO_GLOBAL["buses"].items()
-        if ahora - v["last_gps_at"] < 420
+        if ahora - v["last_gps_at"] < 480
     }
 
-def recolector_fondo():
+def ejecutar_paso_radar(cantidad_paradas=5):
+    """Ejecuta un barrido de arribos de colectivos (usado por el hilo de fondo y por /ok)."""
     global ESTADO_GLOBAL
-    idx = 0
-    while True:
+    if not RADAR_LOCK.acquire(blocking=False):
+        return
+    try:
+        ESTADO_GLOBAL["ultimo_escaneo"] = time.time()
         try:
             r = requests.get(URL_WORKER, timeout=8)
             if r.status_code == 200:
@@ -278,8 +285,9 @@ def recolector_fondo():
         except Exception:
             pass
 
-        lote = [PARADAS_RADAR[(idx + i) % len(PARADAS_RADAR)] for i in range(5)]
-        idx = (idx + 5) % len(PARADAS_RADAR)
+        idx = ESTADO_GLOBAL["idx_radar"]
+        lote = [PARADAS_RADAR[(idx + i) % len(PARADAS_RADAR)] for i in range(cantidad_paradas)]
+        ESTADO_GLOBAL["idx_radar"] = (idx + cantidad_paradas) % len(PARADAS_RADAR)
 
         for p_id, p_cod, p_lin in lote:
             try:
@@ -302,10 +310,29 @@ def recolector_fondo():
             ESTADO_GLOBAL["timestamp"] = datetime.now(tz).strftime("%H:%M:%S")
         except Exception:
             ESTADO_GLOBAL["timestamp"] = time.strftime("%H:%M:%S")
+    finally:
+        RADAR_LOCK.release()
 
+def recolector_fondo():
+    while True:
+        ejecutar_paso_radar(5)
         time.sleep(9)
 
 Thread(target=recolector_fondo, daemon=True).start()
+
+@app.route('/ok')
+@app.route('/cron')
+@app.route('/ping')
+def ruta_cron_ok():
+    """
+    Ventana ultraliviana para Cron-Job:
+    Dispara en segundo plano la consulta de arribos de todos los colectivos como un usuario normal
+    y devuelve una página blanca mínima que dice 'ok' para no saturar cron-job.org.
+    """
+    if time.time() - ESTADO_GLOBAL.get("ultimo_escaneo", 0) > 4:
+        Thread(target=ejecutar_paso_radar, args=(8,), daemon=True).start()
+    html_minimo = "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body style='background:#fff;color:#000;font-family:sans-serif;margin:8px;'>ok</body></html>"
+    return Response(html_minimo, status=200, mimetype='text/html')
 
 @app.route('/foto_perfil')
 def foto_perfil():
@@ -410,14 +437,15 @@ HTML_COMPLETO = """
     .bus-marker-urbano { background: #3E3724; border: 2px solid #F9E2AF; color: #F9E2AF; }
     .bus-marker-52 { background: #3E2824; border: 2px solid #FAB387; color: #FAB387; }
 
-    /* Estados visuales de señal / avería / cabecera */
+    /* Solo titila cuando lleva entre 3 y 4 minutos sin señal */
     .bus-weak { border-style: dashed !important; border-color: #F9E2AF !important; animation: pulseWeak 1.6s infinite; }
+    /* Más de 4 minutos sin señal: detenido hasta recuperar */
     .bus-stalled { background: #3B1D26 !important; border-color: #F38BA8 !important; color: #F38BA8 !important; opacity: 0.88; }
     .bus-cabecera { opacity: 0.72; border-style: dotted !important; }
 
     @keyframes pulseWeak {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.6; }
+      50% { opacity: 0.55; }
     }
 
     .stop-popup-title { font-size: 13px; font-weight: 800; color: #111; }
@@ -425,7 +453,7 @@ HTML_COMPLETO = """
     .btn-query-stop { background: #1E1E2E; color: #CDD6F4; border: 1px solid #45475A; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; margin: 2px; }
     .result-box { margin-top: 6px; padding-top: 4px; border-top: 1px solid #ccc; font-size: 11px; color: #111; }
 
-    /* Sección Posdata / Acerca de la app (abajo del todo, discreta y prolija) */
+    /* Sección Posdata / Acerca de la app */
     .about-card {
       background: #1E1E2E;
       border: 1px solid #313244;
@@ -584,7 +612,8 @@ HTML_COMPLETO = """
     let PARADAS_LISTA = [];
     let mostrandoParadas = true;
 
-    const LIMITE_AVERIA_SEG = 240; // 4 minutos (240 segundos)
+    const LIMITE_DEBIL_SEG = 180;  // 3 minutos (180s) para empezar a titilar como "Señal débil"
+    const LIMITE_AVERIA_SEG = 240; // 4 minutos (240s) para detenerse por pérdida de señal
 
     // Semáforos reales del corredor Plottier - Ruta 22 - Av. Mosconi - Neuquén
     const SEMAFOROS = [
@@ -749,13 +778,15 @@ HTML_COMPLETO = """
       const colorSentido = bus.sentido_code === 'HACIA_NEUQUEN' ? '#FAB387' : '#A6E3A1';
       let estadoHTML = '';
 
-      if (bus.cabecera && bus.edad_senal > 45) {
+      if (bus.cabecera && bus.edad_senal >= LIMITE_DEBIL_SEG) {
         estadoHTML = `<div style="color:#b7950b; font-weight:700; margin-top:4px;">⏸️ En ${bus.cabecera}<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad aguardando horario de salida</span></div>`;
       } else if (bus.edad_senal > LIMITE_AVERIA_SEG) {
         const minSin = Math.floor(bus.edad_senal / 60);
-        estadoHTML = `<div style="color:#c0392b; font-weight:700; margin-top:4px;">🚨 Sin señal (${minSin} min)<br><span style="font-weight:normal; font-size:11px; color:#555;">Posible unidad averiada o detenida</span></div>`;
-      } else if (bus.edad_senal >= 45) {
-        estadoHTML = `<div style="color:#d35400; font-weight:700; margin-top:4px;">⚠️ Señal débil (hace ${Math.round(bus.edad_senal)}s)<br><span style="font-weight:normal; font-size:11px; color:#555;">Avance estimado sobre el recorrido</span></div>`;
+        estadoHTML = `<div style="color:#c0392b; font-weight:700; margin-top:4px;">🚨 Sin señal (${minSin} min)<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad detenida hasta recuperar señal</span></div>`;
+      } else if (bus.edad_senal >= LIMITE_DEBIL_SEG) {
+        const minDebil = Math.floor(bus.edad_senal / 60);
+        const segDebil = Math.round(bus.edad_senal % 60);
+        estadoHTML = `<div style="color:#d35400; font-weight:700; margin-top:4px;">⚠️ Señal débil (${minDebil}m ${segDebil}s)<br><span style="font-weight:normal; font-size:11px; color:#555;">Estimando avance sobre el recorrido</span></div>`;
       } else if (bus.enSemaforo) {
         estadoHTML = `<div style="color:#e67e22; font-weight:700; margin-top:4px;">🚦 Detenido en semáforo</div>`;
       } else {
@@ -782,6 +813,13 @@ HTML_COMPLETO = """
       `;
     }
 
+    function obtenerEstadoVisual(bus) {
+      if (bus.cabecera && bus.edad_senal >= LIMITE_DEBIL_SEG) return "CABECERA";
+      if (bus.edad_senal > LIMITE_AVERIA_SEG) return "AVERIA";
+      if (bus.edad_senal >= LIMITE_DEBIL_SEG) return "DEBIL";
+      return "NORMAL";
+    }
+
     function construirIcono(bus) {
       let clase = "bus-marker-50b";
       if (bus.linea === "50A") clase = "bus-marker-50a";
@@ -789,15 +827,16 @@ HTML_COMPLETO = """
       if (bus.linea === "URBANO") clase = "bus-marker-urbano";
       if (bus.linea.includes("52")) clase = "bus-marker-52";
 
+      const est = obtenerEstadoVisual(bus);
       let estadoClase = "";
       let iconoPrefijo = "🚌";
-      if (bus.cabecera && bus.edad_senal > 45) {
+      if (est === "CABECERA") {
         estadoClase = "bus-cabecera";
         iconoPrefijo = "⏸️";
-      } else if (bus.edad_senal > LIMITE_AVERIA_SEG) {
+      } else if (est === "AVERIA") {
         estadoClase = "bus-stalled";
         iconoPrefijo = "🚨";
-      } else if (bus.edad_senal >= 45) {
+      } else if (est === "DEBIL") {
         estadoClase = "bus-weak";
         iconoPrefijo = "📡";
       }
@@ -821,8 +860,15 @@ HTML_COMPLETO = """
 
         b.edad_senal += dt;
 
-        // 1. Si está en cabecera sin señal o supera los 4 minutos (240s) sin señal, no avanza
-        if ((b.cabecera && b.edad_senal > 45) || b.edad_senal > LIMITE_AVERIA_SEG) {
+        // Actualizar icono automáticamente si cambia de estado (ej. al cruzar los 3 min o 4 min)
+        const nuevoEst = obtenerEstadoVisual(b);
+        if (b.estadoVisual !== nuevoEst) {
+          b.estadoVisual = nuevoEst;
+          b.marker.setIcon(construirIcono(b));
+        }
+
+        // 1. Si está en cabecera sin señal o supera los 4 minutos (240s) sin señal, se detiene
+        if ((b.cabecera && b.edad_senal >= LIMITE_DEBIL_SEG) || b.edad_senal > LIMITE_AVERIA_SEG) {
           continue;
         }
 
@@ -849,8 +895,8 @@ HTML_COMPLETO = """
         }
         if (b.enSemaforo) continue;
 
-        // 3. Calcular velocidad de avance (más conservadora si tiene señal débil)
-        const factorSenal = b.edad_senal >= 45 ? 0.65 : 0.92;
+        // 3. Calcular velocidad de avance (más conservadora cuando pasa los 3 min sin señal)
+        const factorSenal = b.edad_senal >= LIMITE_DEBIL_SEG ? 0.65 : 0.90;
         const velMps = ((b.vel_kmh || 32) / 3.6) * factorSenal;
         let avanceMts = velMps * dt;
 
@@ -883,7 +929,7 @@ HTML_COMPLETO = """
           b.simLon += dLonGrados;
         }
 
-        if (b.edad_senal < 12) {
+        if (b.edad_senal < 15) {
           const err = distMts(b.simLat, b.simLon, b.gpsLat, b.gpsLon);
           if (err > 15 && err < 600) {
             b.simLat += (b.gpsLat - b.simLat) * 0.04;
@@ -971,7 +1017,12 @@ HTML_COMPLETO = """
             }
           }
 
-          sim.marker.setIcon(construirIcono(sim));
+          const nuevoEst = obtenerEstadoVisual(sim);
+          if (sim.estadoVisual !== nuevoEst) {
+            sim.estadoVisual = nuevoEst;
+            sim.marker.setIcon(construirIcono(sim));
+          }
+
           sim.marker.getPopup().setContent(generarHTMLPopup(sim));
           sim.marker.off('click').on('click', () => {
             sim.marker.getPopup().setContent(generarHTMLPopup(sim));
@@ -987,8 +1038,10 @@ HTML_COMPLETO = """
             enSemaforo: false,
             enDesvioMosconi: false,
             pausaHastaMs: 0,
-            ultimoSemaforoIdx: -1
+            ultimoSemaforoIdx: -1,
+            estadoVisual: "NORMAL"
           };
+          nuevoSim.estadoVisual = obtenerEstadoVisual(nuevoSim);
           const m = L.marker([b.lat, b.lon], { icon: construirIcono(nuevoSim) });
           m.bindPopup(generarHTMLPopup(nuevoSim));
           m.on('click', () => {
