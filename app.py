@@ -73,7 +73,6 @@ def agrupar_paradas(paradas, radio_mts=35):
                         g["lineas"][lin_nom] = {"cod": lin_cod, "parada": id_p, "ids": [id_p]}
                     else:
                         if id_p not in g["lineas"][lin_nom]["ids"]:
-                            # Priorizar IDs tipo NV o N antes que códigos largos de otras líneas
                             if id_p.upper().startswith("NV") or id_p.upper().startswith("N"):
                                 g["lineas"][lin_nom]["ids"].insert(0, id_p)
                             else:
@@ -130,7 +129,6 @@ ESTADO_GLOBAL = {
     "idx_radar": 0,
     "ultimo_escaneo": 0.0
 }
-# Caché de arribos por parada para evitar que el 2do clic devuelva vacío por bloqueo de Indalo
 CACHE_PARADAS = {}
 RADAR_LOCK = Lock()
 
@@ -395,7 +393,6 @@ def api_parada():
     ahora = time.time()
     clave_cache = f"{p_id_raw}_{p_cod}_{p_linea}"
 
-    # Si se consultó hace menos de 18 segundos y había datos, devolver caché inmediata
     if clave_cache in CACHE_PARADAS:
         ts_cache, arribos_cache = CACHE_PARADAS[clave_cache]
         if ahora - ts_cache < 18 and arribos_cache:
@@ -426,7 +423,6 @@ def api_parada():
         CACHE_PARADAS[clave_cache] = (ahora, arribos_totales)
         return jsonify({"arribos": arribos_totales})
 
-    # Si la API devolvió vacío en un segundo clic rápido, usar caché reciente (hasta 75s)
     if clave_cache in CACHE_PARADAS:
         ts_cache, arribos_cache = CACHE_PARADAS[clave_cache]
         if ahora - ts_cache < 75 and arribos_cache:
@@ -502,9 +498,7 @@ HTML_COMPLETO = """
     .bus-marker-urbano { background: #3E3724; border: 2px solid #F9E2AF; color: #F9E2AF; }
     .bus-marker-52 { background: #3E2824; border: 2px solid #FAB387; color: #FAB387; }
 
-    /* Solo titila entre 3 y 4 minutos sin señal */
     .bus-weak { border-style: dashed !important; border-color: #F9E2AF !important; animation: pulseWeak 1.6s infinite; }
-    /* Más de 4 minutos sin señal: detenido hasta recuperar */
     .bus-stalled { background: #3B1D26 !important; border-color: #F38BA8 !important; color: #F38BA8 !important; opacity: 0.88; }
     .bus-cabecera { opacity: 0.72; border-style: dotted !important; }
 
@@ -513,7 +507,7 @@ HTML_COMPLETO = """
       50% { opacity: 0.55; }
     }
 
-    /* Ícono resaltado con tilde para las paradas principales de las planillas */
+    /* Ícono resaltado con tilde para las paradas verificadas de las planillas */
     .stop-featured-pin {
       width: 22px;
       height: 22px;
@@ -534,6 +528,7 @@ HTML_COMPLETO = """
     .stop-popup-badge { display: inline-block; background: #e8f8f5; color: #117a65; border: 1px solid #a3e4d7; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 4px; margin-bottom: 4px; }
     .stop-popup-desc { font-size: 11px; color: #555; margin-bottom: 6px; }
     .btn-query-stop { background: #1E1E2E; color: #CDD6F4; border: 1px solid #45475A; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; margin: 2px; }
+    .btn-jump-sched { display: inline-block; margin-top: 5px; background: #25335A; color: #89B4FA; border: 1px solid #89B4FA; padding: 3px 8px; border-radius: 5px; font-size: 10.5px; font-weight: 800; cursor: pointer; width: 100%; text-align: center; }
     .result-box { margin-top: 6px; padding-top: 4px; border-top: 1px solid #ccc; font-size: 11px; color: #111; }
 
     /* Sección de Planillas y Horarios Oficiales */
@@ -543,6 +538,7 @@ HTML_COMPLETO = """
       border-radius: 14px;
       padding: 14px 16px;
       margin-bottom: 14px;
+      scroll-margin-top: 16px;
     }
     .sched-header {
       display: flex;
@@ -595,15 +591,58 @@ HTML_COMPLETO = """
       color: #11111B;
       border-color: #89B4FA;
     }
+    .sched-legend {
+      display: none;
+      background: #181825;
+      border: 1px solid #313244;
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      font-size: 11px;
+      color: #CDD6F4;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .legend-items {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .legend-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10.5px;
+      font-weight: 700;
+    }
+    .dot-zone { width: 11px; height: 11px; border-radius: 3px; background: rgba(137, 180, 250, 0.35); border: 2px solid #89B4FA; display: inline-block; }
+    .dot-next { width: 11px; height: 11px; border-radius: 3px; background: #1E3A24; border: 2px solid #A6E3A1; display: inline-block; }
+    .dot- stops-next { width: 11px; height: 11px; border-radius: 3px; background: rgba(249, 226, 175, 0.28); border: 2px solid #F9E2AF; display: inline-block; }
+    .btn-clear-sched {
+      background: #313244;
+      color: #F38BA8;
+      border: 1px solid #45475A;
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
     .table-responsive {
-      max-height: 320px;
+      max-height: 340px;
       overflow: auto;
       border-radius: 8px;
       border: 1px solid #313244;
+      position: relative;
     }
     table.sched-table {
       width: 100%;
-      border-collapse: collapse;
+      border-collapse: separate;
+      border-spacing: 0;
       font-size: 11px;
       text-align: center;
       background: #181825;
@@ -612,20 +651,55 @@ HTML_COMPLETO = """
     table.sched-table th {
       background: #1E1E2E;
       color: #89B4FA;
-      padding: 8px 6px;
+      padding: 8px 8px;
       font-weight: 800;
       position: sticky;
       top: 0;
+      z-index: 10;
       border-bottom: 1px solid #313244;
       white-space: nowrap;
     }
     table.sched-table td {
-      padding: 6px 5px;
+      padding: 6px 7px;
       border-bottom: 1px solid #262738;
       white-space: nowrap;
     }
-    table.sched-table tr:hover td {
-      background: #252739;
+
+    /* 1. Casilla/Columna entera de la zona seleccionada resaltada */
+    table.sched-table th.col-zone-active {
+      background: #22325A !important;
+      color: #FFFFFF !important;
+      border-top: 2px solid #89B4FA !important;
+      border-left: 2px solid #89B4FA !important;
+      border-right: 2px solid #89B4FA !important;
+      box-shadow: 0 2px 8px rgba(137, 180, 250, 0.35);
+    }
+    table.sched-table td.col-zone-active {
+      background: rgba(137, 180, 250, 0.16) !important;
+      color: #FFFFFF !important;
+      font-weight: 700;
+      border-left: 2px solid #89B4FA !important;
+      border-right: 2px solid #89B4FA !important;
+    }
+    table.sched-table tr:last-child td.col-zone-active {
+      border-bottom: 2px solid #89B4FA !important;
+    }
+
+    /* 2. Próximos horarios en la parada seleccionada (verde intenso) */
+    table.sched-table td.cell-next-arrival {
+      background: #1E3A24 !important;
+      color: #A6E3A1 !important;
+      font-weight: 900 !important;
+      box-shadow: inset 0 0 0 2px #A6E3A1 !important;
+    }
+
+    /* 3. Horarios correspondientes a las próximas paradas de ese mismo colectivo (dorado/ámbar) */
+    table.sched-table td.cell-next-stops {
+      background: rgba(249, 226, 175, 0.20) !important;
+      color: #F9E2AF !important;
+      font-weight: 800 !important;
+      border-top: 1px dashed rgba(249, 226, 175, 0.75) !important;
+      border-bottom: 1px dashed rgba(249, 226, 175, 0.75) !important;
     }
 
     /* Sección Posdata / Acerca de la app */
@@ -745,17 +819,25 @@ HTML_COMPLETO = """
   </div>
 
   <!-- Desplegable de Planillas de Horarios Oficiales -->
-  <section class="sched-card">
+  <section class="sched-card" id="sched-section">
     <div class="sched-header" onclick="togglePlanillas()">
-      <div class="sched-header-title">📅 Horarios Oficiales Fin de Semana (50A y 50B)</div>
+      <div class="sched-header-title" id="sched-title-text">📅 Horarios Oficiales Fin de Semana (50A y 50B)</div>
       <button class="sched-header-btn" id="btn-sched-toggle">Ver Planilla ▾</button>
     </div>
     <div class="sched-content" id="sched-panel">
       <div class="sched-tabs">
-        <button class="sched-tab active" onclick="mostrarPlanilla('50A_SAB', this)">50A Sábado</button>
-        <button class="sched-tab" onclick="mostrarPlanilla('50A_DOM', this)">50A Domingo</button>
-        <button class="sched-tab" onclick="mostrarPlanilla('50B_SAB', this)">50B Sábado</button>
-        <button class="sched-tab" onclick="mostrarPlanilla('50B_DOM', this)">50B Domingo</button>
+        <button class="sched-tab active" data-clave="50A_SAB" onclick="mostrarPlanilla('50A_SAB', this)">50A Sábado</button>
+        <button class="sched-tab" data-clave="50A_DOM" onclick="mostrarPlanilla('50A_DOM', this)">50A Domingo</button>
+        <button class="sched-tab" data-clave="50B_SAB" onclick="mostrarPlanilla('50B_SAB', this)">50B Sábado</button>
+        <button class="sched-tab" data-clave="50B_DOM" onclick="mostrarPlanilla('50B_DOM', this)">50B Domingo</button>
+      </div>
+      <div class="sched-legend" id="sched-legend-box">
+        <div class="legend-items">
+          <span class="legend-tag"><span class="dot-zone"></span> <span id="legend-zone-name">Zona seleccionada</span></span>
+          <span class="legend-tag"><span class="dot-next"></span> Próximos arribos aquí</span>
+          <span class="legend-tag"><span style="width:11px;height:11px;border-radius:3px;background:rgba(249,226,175,0.28);border:2px solid #F9E2AF;display:inline-block;"></span> Horarios en próximas paradas</span>
+        </div>
+        <button class="btn-clear-sched" onclick="limpiarResaltadoPlanilla()">✕ Quitar filtro</button>
       </div>
       <div class="table-responsive" id="sched-table-box"></div>
     </div>
@@ -803,13 +885,14 @@ HTML_COMPLETO = """
     let PARADAS_LISTA = [];
     let mostrandoParadas = true;
     let planillasAbiertas = false;
+    let clavePlanillaActual = "50A_SAB";
+    let puntoKeyResaltado = null;
 
     const LIMITE_DEBIL_SEG = 180;      // 3 minutos (180s) para empezar a titilar como "Señal débil"
     const LIMITE_AVERIA_SEG = 240;     // 4 minutos (240s) para detenerse por pérdida de señal
     const DIST_MAX_EN_RUTA_MTS = 35;   // Si se aleja más de 35m de la ruta, 60fps se apaga
 
     // --- PUNTOS DE CONTROL OFICIALES DE LAS PLANILLAS DE INDALO (RESALTADOS CON ✓) ---
-    // Cada punto mapea exactamente qué columna(s) de la tabla de 50A y 50B le corresponden
     const PUNTOS_CONTROL_OFICIALES = [
       {
         key: "LOTEO_SOCIAL",
@@ -945,42 +1028,6 @@ HTML_COMPLETO = """
       }
     };
 
-    function togglePlanillas() {
-      const p = document.getElementById('sched-panel');
-      const b = document.getElementById('btn-sched-toggle');
-      planillasAbiertas = !planillasAbiertas;
-      if (planillasAbiertas) {
-        p.style.display = 'block';
-        b.innerText = 'Ocultar Planilla ▴';
-        mostrarPlanilla('50A_SAB', document.querySelector('.sched-tab'));
-      } else {
-        p.style.display = 'none';
-        b.innerText = 'Ver Planilla ▾';
-      }
-    }
-
-    function mostrarPlanilla(clave, btnEl) {
-      document.querySelectorAll('.sched-tab').forEach(t => t.classList.remove('active'));
-      if (btnEl) btnEl.classList.add('active');
-
-      const data = PLANILLAS_INDALO[clave];
-      if (!data) return;
-
-      let h = `<table class="sched-table"><thead><tr>`;
-      data.columnas.forEach(col => { h += `<th>${col}</th>`; });
-      h += `</tr></thead><tbody>`;
-
-      data.filas.forEach(fila => {
-        h += `<tr>`;
-        fila.forEach((celda, idx) => {
-          h += idx === 0 ? `<td><strong>${celda}</strong></td>` : `<td>${celda}</td>`;
-        });
-        h += `</tr>`;
-      });
-      h += `</tbody></table>`;
-      document.getElementById('sched-table-box').innerHTML = h;
-    }
-
     function obtenerMinutosActualesArgentina() {
       const ahora = new Date();
       const fmt = new Intl.DateTimeFormat('en-US', {
@@ -998,7 +1045,186 @@ HTML_COMPLETO = """
       return { minActual: h * 60 + m, sufijoDia: SufijoDia, etiquetaDia: EtiquetaDia };
     }
 
-    // Devuelve en cuánto pasa y los próximos horarios programados exactos de un Punto de Control Oficial
+    function togglePlanillas() {
+      const p = document.getElementById('sched-panel');
+      const b = document.getElementById('btn-sched-toggle');
+      planillasAbiertas = !planillasAbiertas;
+      if (planillasAbiertas) {
+        p.style.display = 'block';
+        b.innerText = 'Ocultar Planilla ▴';
+        mostrarPlanilla(clavePlanillaActual);
+      } else {
+        p.style.display = 'none';
+        b.innerText = 'Ver Planilla ▾';
+      }
+    }
+
+    function limpiarResaltadoPlanilla() {
+      puntoKeyResaltado = null;
+      document.getElementById('sched-legend-box').style.display = 'none';
+      document.getElementById('sched-title-text').innerText = '📅 Horarios Oficiales Fin de Semana (50A y 50B)';
+      mostrarPlanilla(clavePlanillaActual);
+    }
+
+    // Abre automáticamente el panel de abajo y resalta la zona seleccionada + próximos horarios + próximas paradas
+    function desplegarPlanillaConZona(puntoKey, lineaPreferida = null) {
+      const punto = PUNTOS_CONTROL_OFICIALES.find(p => p.key === puntoKey);
+      if (!punto) return;
+
+      puntoKeyResaltado = puntoKey;
+      const infoTiempo = obtenerMinutosActualesArgentina();
+
+      let lin = lineaPreferida;
+      if (lin !== "50A" && lin !== "50B") {
+        lin = (punto.cols50A && punto.cols50A.length > 0) ? "50A" : "50B";
+      } else if (lin === "50B" && (!punto.cols50B || punto.cols50B.length === 0)) {
+        lin = "50A";
+      }
+
+      const clave = `${lin}_${infoTiempo.sufijoDia}`;
+      clavePlanillaActual = clave;
+
+      const p = document.getElementById('sched-panel');
+      const b = document.getElementById('btn-sched-toggle');
+      planillasAbiertas = true;
+      p.style.display = 'block';
+      b.innerText = 'Ocultar Planilla ▴';
+
+      mostrarPlanilla(clave, null);
+    }
+
+    function irALaPlanillaAbajo() {
+      const sec = document.getElementById('sched-section');
+      if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function mostrarPlanilla(clave, btnEl = null) {
+      clavePlanillaActual = clave;
+      document.querySelectorAll('.sched-tab').forEach(t => {
+        if (t.getAttribute('data-clave') === clave) {
+          t.classList.add('active');
+        } else {
+          t.classList.remove('active');
+        }
+      });
+
+      const data = PLANILLAS_INDALO[clave];
+      if (!data) return;
+
+      const es50A = clave.startsWith("50A");
+      const infoTiempo = obtenerMinutosActualesArgentina();
+
+      // Determinar qué columnas y filas resaltar si hay una parada verificada seleccionada
+      const colsSeleccionadas = new Set();
+      const celdasProximoArribo = new Set(); // "row_col" de los próximos 3 colectivos en la parada seleccionada
+      const celdasProximasParadas = new Set(); // "row_col" de las paradas siguientes de esos colectivos
+      let primeraFilaResaltada = -1;
+      let primeraColResaltada = -1;
+
+      const punto = puntoKeyResaltado ? PUNTOS_CONTROL_OFICIALES.find(p => p.key === puntoKeyResaltado) : null;
+      const legendBox = document.getElementById('sched-legend-box');
+      const titleText = document.getElementById('sched-title-text');
+
+      if (punto) {
+        const listaCols = es50A ? punto.cols50A : punto.cols50B;
+        if (listaCols && listaCols.length > 0) {
+          legendBox.style.display = 'flex';
+          document.getElementById('legend-zone-name').innerText = `Zona: ${punto.nombreOficial}`;
+          titleText.innerText = `📅 Planilla Oficial · Zona resaltada: ${punto.nombreOficial}`;
+
+          listaCols.forEach(cObj => {
+            const cIdx = cObj.idx;
+            colsSeleccionadas.add(cIdx);
+            if (primeraColResaltada === -1) primeraColResaltada = cIdx;
+
+            // Buscar las próximas 3 filas a partir de la hora actual en esta columna
+            const candidatos = [];
+            data.filas.forEach((fila, rIdx) => {
+              const hhmm = fila[cIdx];
+              if (!hhmm || hhmm === "-") return;
+              const partes = hhmm.split(':');
+              const minPaso = parseInt(partes[0], 10) * 60 + parseInt(partes[1], 10);
+              let dif = minPaso - infoTiempo.minActual;
+              if (dif < -720) dif += 1440;
+              if (dif >= 0 && dif <= 240) {
+                candidatos.push({ rIdx, dif });
+              }
+            });
+
+            candidatos.sort((a, b) => a.dif - b.dif);
+            const topFilas = candidatos.slice(0, 3);
+
+            topFilas.forEach((item, orden) => {
+              celdasProximoArribo.add(`${item.rIdx}_${cIdx}`);
+              if (primeraFilaResaltada === -1) primeraFilaResaltada = item.rIdx;
+
+              // Para los próximos 2 servicios, resaltar hacia la derecha los horarios en las próximas paradas
+              if (orden < 2) {
+                for (let nextCol = cIdx + 1; nextCol < data.columnas.length; nextCol++) {
+                  const valSig = data.filas[item.rIdx][nextCol];
+                  if (valSig && valSig !== "-") {
+                    celdasProximasParadas.add(`${item.rIdx}_${nextCol}`);
+                  }
+                }
+              }
+            });
+          });
+        } else {
+          legendBox.style.display = 'none';
+          titleText.innerText = '📅 Horarios Oficiales Fin de Semana (50A y 50B)';
+        }
+      } else {
+        legendBox.style.display = 'none';
+        titleText.innerText = '📅 Horarios Oficiales Fin de Semana (50A y 50B)';
+      }
+
+      let h = `<table class="sched-table"><thead><tr>`;
+      data.columnas.forEach((col, cIdx) => {
+        const claseCol = colsSeleccionadas.has(cIdx) ? 'col-zone-active' : '';
+        const icono = colsSeleccionadas.has(cIdx) ? '📍 ' : '';
+        h += `<th class="${claseCol}" id="sched-th-${cIdx}">${icono}${col}</th>`;
+      });
+      h += `</tr></thead><tbody>`;
+
+      data.filas.forEach((fila, rIdx) => {
+        h += `<tr id="sched-tr-${rIdx}">`;
+        fila.forEach((celda, cIdx) => {
+          const clases = [];
+          if (colsSeleccionadas.has(cIdx)) clases.push('col-zone-active');
+          if (celdasProximoArribo.has(`${rIdx}_${cIdx}`)) {
+            clases.push('cell-next-arrival');
+          } else if (celdasProximasParadas.has(`${rIdx}_${cIdx}`)) {
+            clases.push('cell-next-stops');
+          }
+
+          const prefijo = celdasProximoArribo.has(`${rIdx}_${cIdx}`)
+            ? '⏱ '
+            : (celdasProximasParadas.has(`${rIdx}_${cIdx}`) ? '➔ ' : '');
+
+          h += `<td class="${clases.join(' ')}">${prefijo}${celda}</td>`;
+        });
+        h += `</tr>`;
+      });
+      h += `</tbody></table>`;
+
+      const tableBox = document.getElementById('sched-table-box');
+      tableBox.innerHTML = h;
+
+      // Auto-centrar la tabla en la zona y horario resaltados
+      if (primeraColResaltada !== -1 || primeraFilaResaltada !== -1) {
+        setTimeout(() => {
+          const thEl = document.getElementById(`sched-th-${Math.max(0, primeraColResaltada)}`);
+          const trEl = document.getElementById(`sched-tr-${Math.max(0, primeraFilaResaltada - 1)}`);
+          if (thEl) {
+            tableBox.scrollLeft = Math.max(0, thEl.offsetLeft - 60);
+          }
+          if (trEl) {
+            tableBox.scrollTop = Math.max(0, trEl.offsetTop - 38);
+          }
+        }, 60);
+      }
+    }
+
     function calcularHorariosPuntoOficial(puntoKey, linNom) {
       if (linNom !== "50A" && linNom !== "50B") return null;
       const punto = PUNTOS_CONTROL_OFICIALES.find(p => p.key === puntoKey);
@@ -1020,7 +1246,7 @@ HTML_COMPLETO = """
           const partes = hhmm.split(':');
           const minPaso = parseInt(partes[0], 10) * 60 + parseInt(partes[1], 10);
           let dif = minPaso - infoTiempo.minActual;
-          if (dif < -720) dif += 1440; // Cruce de medianoche (00:xx)
+          if (dif < -720) dif += 1440;
           if (dif >= 0 && dif <= 240) {
             proximos.push({ hora: hhmm, enMin: dif });
           }
@@ -1052,7 +1278,7 @@ HTML_COMPLETO = """
           </div>
         `;
       });
-      html += `</div>`;
+      html += `<button class="btn-jump-sched" onclick="irALaPlanillaAbajo()">📅 Ver zona resaltada en planilla ▾</button></div>`;
       return html;
     }
 
@@ -1207,10 +1433,9 @@ HTML_COMPLETO = """
     function dibujarParadas(paradas) {
       capaParadas.clearLayers();
 
-      // Asociar cada uno de los 7 puntos oficiales de planilla a su parada más cercana en el mapa
-      const mapaDestacadas = {}; // indiceParada -> puntoOficial
+      const mapaDestacadas = {};
       PUNTOS_CONTROL_OFICIALES.forEach(pc => {
-        let mejorIdx = -1, menorD = 220; // hasta 220 metros de tolerancia
+        let mejorIdx = -1, menorD = 220;
         paradas.forEach((p, idx) => {
           const d = distMts(pc.lat, pc.lon, p[1], p[2]);
           if (d < menorD) {
@@ -1235,7 +1460,6 @@ HTML_COMPLETO = """
 
         let marker;
         if (puntoOficial) {
-          // Parada principal de planilla resaltada con tilde ✓
           const iconoDestacado = L.divIcon({
             className: 'custom-stop-featured',
             html: `<div class="stop-featured-pin" title="${puntoOficial.nombreOficial}">✓</div>`,
@@ -1244,7 +1468,6 @@ HTML_COMPLETO = """
           });
           marker = L.marker([lat, lon], { icon: iconoDestacado, zIndexOffset: 900 });
         } else {
-          // Resto de las paradas comunes más pequeñas y discretas
           marker = L.circleMarker([lat, lon], {
             radius: 3.0, color: '#FAB387', fillColor: '#F9E2AF', fillOpacity: 0.65, weight: 1.0
           });
@@ -1254,7 +1477,7 @@ HTML_COMPLETO = """
         const badgeOficial = puntoOficial ? `<div class="stop-popup-badge">✓ Parada Oficial de Planilla</div>` : '';
 
         marker.bindPopup(`
-          <div class="stop-popup-wrap" style="min-width:185px;">
+          <div class="stop-popup-wrap" style="min-width:190px;">
             ${badgeOficial}
             <div class="stop-popup-title">${tituloPopup}</div>
             <div class="stop-popup-desc">Ref: ${id}</div>
@@ -1263,9 +1486,12 @@ HTML_COMPLETO = """
           </div>
         `);
 
-        // Si es una parada resaltada, al abrir el popup mostrar de inmediato en cuánto pasa según planilla
+        // Al seleccionar una parada verificada, desplegar también abajo la planilla resaltando su zona y próximos horarios
         if (puntoOficial) {
           marker.on('popupopen', (e) => {
+            const linInicial = lineas["50A"] ? "50A" : (lineas["50B"] ? "50B" : null);
+            desplegarPlanillaConZona(pKey, linInicial);
+
             const popupNode = e.popup.getElement();
             if (!popupNode) return;
             const box = popupNode.querySelector('.result-box');
@@ -1285,9 +1511,12 @@ HTML_COMPLETO = """
     }
 
     async function consultarParada(btnEl, idParada, codLinea, linNom, puntoKey) {
-      // Buscar el contenedor exacto del popup donde se hizo clic (evita fallos al tocar varias veces)
       const wrap = btnEl ? btnEl.closest('.stop-popup-wrap') : null;
       const box = wrap ? wrap.querySelector('.result-box') : document.querySelector('.leaflet-popup-content .result-box');
+
+      if (puntoKey && (linNom === "50A" || linNom === "50B")) {
+        desplegarPlanillaConZona(puntoKey, linNom);
+      }
 
       const progHTML = puntoKey ? armarHTMLHorarioProgramado(puntoKey, linNom) : '';
 
