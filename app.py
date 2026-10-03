@@ -42,6 +42,21 @@ for rec in raw_recorridos:
         if p.get("latitud") and p.get("longitud")
     ]
 
+# Cabeceras conocidas donde los colectivos apagan el GPS al terminar el recorrido
+CABECERAS_GEO = [
+    (-38.9314, -68.2494, "Cabecera Plottier Norte"),
+    (-38.9345, -68.2585, "Cabecera Casa de Té"),
+    (-38.9302, -68.2585, "Cabecera Aristóbulo del Valle"),
+    (-38.9607, -68.2491, "Cabecera Plottier Sur"),
+    (-38.9645, -68.2433, "Cabecera Zabaleta"),
+    (-38.9562, -68.2176, "Terminal ETOP Plottier"),
+    (-38.9561, -68.3385, "Cabecera Las Lilas / 50R"),
+    (-38.9840, -68.3494, "Cabecera B° Las Perlas"),
+    (-38.9822, -68.3070, "Cabecera Las Perlas Este"),
+    (-38.9461, -68.0575, "Cabecera Neuquén Centro"),
+    (-38.9571, -68.0562, "Cabecera Neuquén Parque Central")
+]
+
 # 2. Agrupar paradas que estén a menos de 35 metros
 def agrupar_paradas(paradas, radio_mts=35):
     grupos = []
@@ -76,17 +91,24 @@ PARADAS_CLUSTERIZADAS = agrupar_paradas(PARADAS_RAW)
 
 URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
 
+# Paradas terminales y estratégicas para capturar todas las unidades en ambos sentidos
 PARADAS_RADAR = [
+    ("NV1102", "1013", "50A"),
     ("NV1244", "1013", "50A"),
-    ("NV2002", "1013", "50A"),
+    ("NV1012", "1013", "50A"),
+    ("NV4120", "1014", "50B"),
+    ("NV2249", "1014", "50B"),
     ("NV2258", "1014", "50B"),
-    ("NV2002", "1014", "50B"),
-    ("NV6043", "1015", "50R"),
+    ("NV 4998", "1015", "50R"),
+    ("NV6000", "1015", "50R"),
     ("NV5019", "1015", "50R"),
+    ("NV8064", "1109", "URBANO"),
+    ("51 00001", "1109", "URBANO"),
     ("NV2258", "1109", "URBANO"),
-    ("51 00012", "1109", "URBANO"),
-    ("5200028", "1079", "52 CENTRO"),
-    ("5200028", "1080", "52 UNION")
+    ("5200001", "1079", "52 CENTRO"),
+    ("5200047", "1079", "52 CENTRO"),
+    ("5200001", "1080", "52 UNION"),
+    ("5200047", "1080", "52 UNION")
 ]
 
 ESTADO_GLOBAL = {
@@ -99,6 +121,12 @@ def distancia_km(lat1, lon1, lat2, lon2):
     d_lat = (lat1 - lat2) * 111.0
     d_lon = (lon1 - lon2) * 111.0 * 0.777
     return math.sqrt(d_lat**2 + d_lon**2)
+
+def detectar_cabecera(lat, lon):
+    for c_lat, c_lon, c_nom in CABECERAS_GEO:
+        if distancia_km(lat, lon, c_lat, c_lon) <= 0.35:
+            return c_nom
+    return None
 
 def normalizar_linea(linea_raw):
     lin = str(linea_raw or "").upper().strip()
@@ -117,13 +145,11 @@ def normalizar_linea(linea_raw):
     return lin
 
 def deducir_sentido_real(ramal_raw, sentido_worker=""):
-    """Corrige el sentido invertido que devuelve el Worker viejo."""
     txt = str(ramal_raw or "").upper()
     if "IDA" in txt:
         return "Hacia Neuquén", "HACIA_NEUQUEN"
     if "VUELTA" in txt or "VTA" in txt:
         return "Hacia Plottier", "HACIA_PLOTTIER"
-    # Si viene del endpoint raíz del Worker sin nombre de bandera, invertimos el sentido del Worker
     sw = str(sentido_worker or "").upper()
     if "NEUQU" in sw:
         return "Hacia Plottier", "HACIA_PLOTTIER"
@@ -158,9 +184,10 @@ def procesar_nuevas_posiciones(detecciones):
 
         if bus_match_id:
             bus = ESTADO_GLOBAL["buses"][bus_match_id]
+            dist_avance = distancia_km(bus["lat"], bus["lon"], lat, lon)
             delta_lon = lon - bus["lon"]
+            dt = max(ahora - bus["last_gps_at"], 1.0)
 
-            # Priorizar el sentido oficial de la bandera (IDA/VUELTA) si está disponible
             if sentido_fijo:
                 sentido = sentido_fijo
                 sentido_code = code_fijo
@@ -175,13 +202,28 @@ def procesar_nuevas_posiciones(detecciones):
                 sentido = bus["sentido"]
                 sentido_code = bus["sentido_code"]
 
+            # Si el GPS realmente reportó una coordenada distinta (> 12 metros)
+            if dist_avance > 0.012:
+                vel_calc = (dist_avance / dt) * 3600.0
+                vel_kmh = round(max(18.0, min(vel_calc, 58.0)), 1)
+                bus.update({
+                    "prev_lat": bus["lat"],
+                    "prev_lon": bus["lon"],
+                    "lat": lat,
+                    "lon": lon,
+                    "vel_kmh": vel_kmh,
+                    "last_gps_at": ahora
+                })
+            else:
+                # Misma coordenada pero la API confirma que sigue activo
+                if ahora - bus["last_gps_at"] < 40:
+                    bus["last_gps_at"] = ahora - 10
+
             bus.update({
-                "lat": lat,
-                "lon": lon,
                 "ramal": d.get("ramal") or bus.get("ramal"),
                 "sentido": sentido,
                 "sentido_code": sentido_code,
-                "tiempo_arribo": d.get("tiempo_arribo") or bus.get("tiempo_arribo"),
+                "cabecera": detectar_cabecera(lat, lon),
                 "updated_at": ahora
             })
         else:
@@ -209,15 +251,20 @@ def procesar_nuevas_posiciones(detecciones):
                 "ramal": d.get("ramal") or f"Línea {linea}",
                 "sentido": sentido,
                 "sentido_code": sentido_code,
-                "tiempo_arribo": d.get("tiempo_arribo"),
                 "lat": lat,
                 "lon": lon,
+                "prev_lat": lat,
+                "prev_lon": lon,
+                "vel_kmh": 34.0,
+                "cabecera": detectar_cabecera(lat, lon),
+                "last_gps_at": ahora,
                 "updated_at": ahora
             }
 
+    # Mantener unidades hasta 6 minutos (360s) para mostrar "Señal débil" y "+3 min posible avería"
     ESTADO_GLOBAL["buses"] = {
         k: v for k, v in ESTADO_GLOBAL["buses"].items()
-        if ahora - v["updated_at"] < 95
+        if ahora - v["last_gps_at"] < 360
     }
 
 def recolector_fondo():
@@ -232,8 +279,8 @@ def recolector_fondo():
         except Exception:
             pass
 
-        lote = [PARADAS_RADAR[(idx + i) % len(PARADAS_RADAR)] for i in range(4)]
-        idx = (idx + 4) % len(PARADAS_RADAR)
+        lote = [PARADAS_RADAR[(idx + i) % len(PARADAS_RADAR)] for i in range(5)]
+        idx = (idx + 5) % len(PARADAS_RADAR)
 
         for p_id, p_cod, p_lin in lote:
             try:
@@ -245,7 +292,7 @@ def recolector_fondo():
                 if rp.status_code == 200:
                     arribos = rp.json().get("arribos", [])
                     procesar_nuevas_posiciones([
-                        {**a, "linea": p_lin, "tiempo_arribo": a.get("tiempo")}
+                        {**a, "linea": p_lin}
                         for a in arribos if a.get("lat") and a.get("lon")
                     ])
             except Exception:
@@ -257,7 +304,7 @@ def recolector_fondo():
         except Exception:
             ESTADO_GLOBAL["timestamp"] = time.strftime("%H:%M:%S")
 
-        time.sleep(10)
+        time.sleep(9)
 
 Thread(target=recolector_fondo, daemon=True).start()
 
@@ -279,14 +326,13 @@ def api_parada():
         if r.status_code == 200:
             data = r.json()
             arribos = data.get("arribos", [])
-            # Corregir el texto de sentido en cada arribo antes de enviarlo al navegador
             for a in arribos:
                 sent_real, _ = deducir_sentido_real(a.get("ramal"), a.get("sentido"))
                 if sent_real:
                     a["sentido"] = sent_real
 
             procesar_nuevas_posiciones([
-                {**a, "linea": p_linea, "tiempo_arribo": a.get("tiempo")}
+                {**a, "linea": p_linea}
                 for a in arribos if a.get("lat") and a.get("lon")
             ])
             return jsonify({"arribos": arribos})
@@ -296,17 +342,23 @@ def api_parada():
 
 @app.route('/api/radar')
 def api_radar():
+    ahora = time.time()
+    lista = []
+    for b in ESTADO_GLOBAL["buses"].values():
+        edad = int(max(0, ahora - b["last_gps_at"]))
+        lista.append({**b, "edad_senal": edad})
     return jsonify({
         "timestamp": ESTADO_GLOBAL["timestamp"],
-        "buses": list(ESTADO_GLOBAL["buses"].values()),
-        "total_buses": len(ESTADO_GLOBAL["buses"])
+        "buses": lista,
+        "total_buses": len(lista)
     })
 
 @app.route('/api/static_data')
 def api_static_data():
     return jsonify({
         "trazas": TRAZAS_GEO,
-        "paradas": PARADAS_CLUSTERIZADAS
+        "paradas": PARADAS_CLUSTERIZADAS,
+        "paradas_raw": PARADAS_RAW
     })
 
 @app.route('/')
@@ -328,21 +380,31 @@ HTML_COMPLETO = """
     h1 { font-size: 22px; color: #89B4FA; font-weight: 800; }
     .sub { font-size: 13px; color: #A6ADC8; margin-top: 2px; }
     #map-container { position: relative; margin-bottom: 16px; border-radius: 14px; overflow: hidden; border: 1px solid #313244; }
-    #map { height: 440px; width: 100%; background: #11111B; }
-    .map-badge { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(24, 24, 37, 0.9); backdrop-filter: blur(6px); padding: 6px 12px; border-radius: 8px; font-size: 12px; color: #CDD6F4; border: 1px solid #313244; font-weight: 700; }
+    #map { height: 460px; width: 100%; background: #11111B; }
+    .map-badge { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(24, 24, 37, 0.92); backdrop-filter: blur(6px); padding: 6px 12px; border-radius: 8px; font-size: 12px; color: #CDD6F4; border: 1px solid #313244; font-weight: 700; }
     .map-controls { position: absolute; bottom: 10px; right: 10px; z-index: 1000; display: flex; gap: 6px; }
-    .btn-map-control { background: rgba(24, 24, 37, 0.9); border: 1px solid #45475A; color: #CDD6F4; font-size: 11px; font-weight: 700; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+    .btn-map-control { background: rgba(24, 24, 37, 0.92); border: 1px solid #45475A; color: #CDD6F4; font-size: 11px; font-weight: 700; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
     
     .bar-fixed { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(24, 24, 37, 0.96); backdrop-filter: blur(10px); padding: 12px 16px; border-top: 1px solid #313244; display: flex; justify-content: space-between; align-items: center; z-index: 2000; }
     .btn-refresh { background: #89B4FA; color: #11111B; border: none; font-size: 14px; font-weight: 700; padding: 10px 18px; border-radius: 10px; cursor: pointer; }
     .status-text { font-size: 12px; color: #A6ADC8; }
 
-    .bus-marker { display: flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 8px; font-size: 11px; font-weight: 800; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); }
+    .bus-marker { display: flex; align-items: center; justify-content: center; gap: 4px; padding: 3px 7px; border-radius: 8px; font-size: 11px; font-weight: 800; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.65); position: relative; }
     .bus-marker-50a { background: #1E3A24; border: 2px solid #A6E3A1; color: #A6E3A1; }
     .bus-marker-50b { background: #1E2D42; border: 2px solid #89B4FA; color: #89B4FA; }
     .bus-marker-50r { background: #38243E; border: 2px solid #CBA6F7; color: #CBA6F7; }
     .bus-marker-urbano { background: #3E3724; border: 2px solid #F9E2AF; color: #F9E2AF; }
     .bus-marker-52 { background: #3E2824; border: 2px solid #FAB387; color: #FAB387; }
+
+    /* Estados visuales de señal / avería / cabecera */
+    .bus-weak { border-style: dashed !important; border-color: #F9E2AF !important; animation: pulseWeak 1.6s infinite; }
+    .bus-stalled { background: #3B1D26 !important; border-color: #F38BA8 !important; color: #F38BA8 !important; opacity: 0.88; }
+    .bus-cabecera { opacity: 0.72; border-style: dotted !important; }
+
+    @keyframes pulseWeak {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
 
     .stop-popup-title { font-size: 13px; font-weight: 800; color: #111; }
     .stop-popup-desc { font-size: 11px; color: #555; margin-bottom: 6px; }
@@ -353,7 +415,7 @@ HTML_COMPLETO = """
 <body>
   <header>
     <h1>Transporte Plottier</h1>
-    <p class="sub">GPS en vivo (50A, 50B, 50R, 51 Urbano y 52)</p>
+    <p class="sub">GPS en vivo y predicción continua (50A, 50B, 50R, 51 Urbano y 52)</p>
   </header>
 
   <div id="map-container">
@@ -373,9 +435,96 @@ HTML_COMPLETO = """
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     let map, capaRuta, capaParadas;
-    let marcadoresBuses = {};
+    let busesSim = {}; // id -> estado físico y marcador en tiempo real
     let RUTAS_GEO = {};
+    let RUTAS_DENSAS = {};
+    let PARADAS_LISTA = [];
     let mostrandoParadas = true;
+
+    // Semáforos reales del corredor Plottier - Ruta 22 - Av. Mosconi - Neuquén
+    const SEMAFOROS = [
+      [-38.9444, -68.2304], // Av. del Trabajo y Favaloro
+      [-38.9444, -68.2257], // Av. San Martín y Av. del Trabajo
+      [-38.9506, -68.2258], // Av. San Martín y Alberdi
+      [-38.9559, -68.2378], // Av. Zabaleta y Libertad
+      [-38.9569, -68.2263], // Buenos Aires Norte y Riavitz
+      [-38.9557, -68.2180], // Cruce Terminal ETOP
+      [-38.9556, -68.1969], // Autovía y Constituyentes
+      [-38.9558, -68.1845], // Autovía y Piscicultura
+      [-38.9564, -68.1676], // Río Colorado (límite Plottier-Nqn)
+      [-38.9578, -68.1552], // B° Valentina Sur
+      [-38.9579, -68.1401], // Solalique / ETON
+      [-38.9581, -68.1281], // Bejarano
+      [-38.9591, -68.1172], // Anaya / Ignacio Rivas
+      [-38.9592, -68.1065], // Gatica
+      [-38.9594, -68.0935], // El Cholar
+      [-38.9595, -68.0843], // Jumbo / Lastra
+      [-38.9582, -68.0748], // Soldado Desconocido / Alcorta
+      [-38.9582, -68.0665], // Lainez
+      [-38.9582, -68.0590], // Av. Olascoaga
+      [-38.9508, -68.0561]  // Av. Argentina / Centro
+    ];
+
+    function distMts(lat1, lon1, lat2, lon2) {
+      const dLat = (lat1 - lat2) * 111139;
+      const dLon = (lon1 - lon2) * 111139 * 0.777;
+      return Math.sqrt(dLat * dLat + dLon * dLon);
+    }
+
+    // Subdividir polilíneas cada 20 metros para que el seguimiento de ruta sea suave y exacto
+    function densificarPolilinea(pts) {
+      if (!pts || pts.length < 2) return pts || [];
+      const res = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p1 = pts[i], p2 = pts[i + 1];
+        const d = distMts(p1[0], p1[1], p2[0], p2[1]);
+        const pasos = Math.max(1, Math.ceil(d / 20));
+        for (let s = 1; s <= pasos; s++) {
+          const t = s / pasos;
+          res.push([p1[0] + (p2[0] - p1[0]) * t, p1[1] + (p2[1] - p1[1]) * t]);
+        }
+      }
+      return res;
+    }
+
+    function encontrarIndiceMasCercano(lat, lon, pts) {
+      let minIdx = 0, minDist = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const d = distMts(lat, lon, pts[i][0], pts[i][1]);
+        if (d < minDist) {
+          minDist = d;
+          minIdx = i;
+        }
+      }
+      return { index: minIdx, dist: minDist };
+    }
+
+    function calcularProximaParada(bus) {
+      let mejorNombre = null;
+      let menorDist = Infinity;
+      const haciaNqn = bus.sentido_code === "HACIA_NEUQUEN";
+
+      for (const p of PARADAS_LISTA) {
+        const idP = p[0], latP = p[1], lonP = p[2], descP = p[3], lineasP = p[4];
+        if (!lineasP || !lineasP[bus.linea]) continue;
+
+        // Filtrar paradas que estén hacia adelante según el sentido de avance
+        const deltaLon = lonP - bus.simLon;
+        if (haciaNqn && deltaLon < -0.0005) continue;
+        if (!haciaNqn && deltaLon > 0.0005) continue;
+
+        const d = distMts(bus.simLat, bus.simLon, latP, lonP);
+        if (d > 25 && d < menorDist) {
+          menorDist = d;
+          mejorNombre = (descP && descP !== idP) ? `${descP} (${idP})` : idP;
+        }
+      }
+
+      if (!mejorNombre || menorDist > 3500) return "Avanzando en recorrido";
+      const velMps = Math.max(4.5, (bus.vel_kmh || 32) / 3.6);
+      const minEst = Math.max(1, Math.round((menorDist / velMps) / 60));
+      return `${mejorNombre} (~${minEst} min)`;
+    }
 
     async function init() {
       map = L.map('map', { zoomControl: false }).setView([-38.955, -68.18], 12);
@@ -388,10 +537,19 @@ HTML_COMPLETO = """
       const r = await fetch('/api/static_data');
       const staticData = await r.json();
       RUTAS_GEO = staticData.trazas;
+      PARADAS_LISTA = staticData.paradas_raw || [];
+
+      for (const [lin, sentidos] of Object.entries(RUTAS_GEO)) {
+        RUTAS_DENSAS[lin] = {};
+        for (const [sent, pts] of Object.entries(sentidos)) {
+          RUTAS_DENSAS[lin][sent] = densificarPolilinea(pts);
+        }
+      }
 
       dibujarParadas(staticData.paradas);
       pedirDatos();
-      setInterval(pedirDatos, 10000);
+      setInterval(pedirDatos, 9000);
+      requestAnimationFrame(loopFisicoContinuo);
     }
 
     function dibujarParadas(paradas) {
@@ -400,7 +558,7 @@ HTML_COMPLETO = """
         const id = p[0], lat = p[1], lon = p[2], desc = p[3], lineas = p[4];
         let botones = '';
         for (const [linNom, info] of Object.entries(lineas)) {
-          botones += `<button class="btn-query-stop" onclick="consultarParada('${info.parada}', '${info.cod}', '${linNom}')">⏱️ ${linNom}</button>`;
+          botones += `<button class="btn-query-stop" onclick="consultarParada('${info.parada}', '${info.cod}', '${linNom}')">⏱️️ ${linNom}</button>`;
         }
 
         const marker = L.circleMarker([lat, lon], {
@@ -408,7 +566,7 @@ HTML_COMPLETO = """
         });
 
         marker.bindPopup(`
-          <div style="min-width:160px;">
+          <div style="min-width:165px;">
             <div class="stop-popup-title">📍 ${desc}</div>
             <div class="stop-popup-desc">Ref: ${id}</div>
             <div>${botones}</div>
@@ -444,24 +602,161 @@ HTML_COMPLETO = """
       }
     }
 
-    function deslizarMarcador(marker, destLat, destLon) {
-      const from = marker.getLatLng();
-      const to = L.latLng(destLat, destLon);
-      if (from.distanceTo(to) < 1) return;
-      if (from.distanceTo(to) > 2500) { marker.setLatLng(to); return; }
+    function generarHTMLPopup(bus) {
+      const colorSentido = bus.sentido_code === 'HACIA_NEUQUEN' ? '#FAB387' : '#A6E3A1';
+      let estadoHTML = '';
 
-      let start = null;
-      const duration = 1200;
-
-      function step(timestamp) {
-        if (!start) start = timestamp;
-        const progress = Math.min((timestamp - start) / duration, 1);
-        const lat = from.lat + (to.lat - from.lat) * progress;
-        const lon = from.lng + (to.lng - from.lng) * progress;
-        marker.setLatLng([lat, lon]);
-        if (progress < 1) requestAnimationFrame(step);
+      if (bus.cabecera && bus.edad_senal > 45) {
+        estadoHTML = `<div style="color:#F9E2AF; font-weight:700; margin-top:4px;">⏸️ En ${bus.cabecera}<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad aguardando horario de salida</span></div>`;
+      } else if (bus.edad_senal > 180) {
+        const minSin = Math.floor(bus.edad_senal / 60);
+        estadoHTML = `<div style="color:#c0392b; font-weight:700; margin-top:4px;">🚨 Sin señal (${minSin} min)<br><span style="font-weight:normal; font-size:11px; color:#555;">Posible unidad averiada o detenida</span></div>`;
+      } else if (bus.edad_senal >= 45) {
+        estadoHTML = `<div style="color:#d35400; font-weight:700; margin-top:4px;">⚠️ Señal débil (hace ${bus.edad_senal}s)<br><span style="font-weight:normal; font-size:11px; color:#555;">Avance estimado sobre el recorrido</span></div>`;
+      } else if (bus.enSemaforo) {
+        estadoHTML = `<div style="color:#e67e22; font-weight:700; margin-top:4px;">🚦 Detenido en semáforo</div>`;
+      } else {
+        estadoHTML = `<div style="color:#27ae60; font-weight:700; margin-top:4px;">🟢 En movimiento (~${Math.round(bus.vel_kmh || 34)} km/h)</div>`;
       }
-      requestAnimationFrame(step);
+
+      const desvioHTML = bus.enDesvioMosconi
+        ? `<div style="color:#8e44ad; font-size:11px; font-weight:700; margin-top:2px;">🚧 Desvío obras Av. Mosconi (traza alternativa)</div>`
+        : '';
+
+      const proxParada = calcularProximaParada(bus);
+
+      return `
+        <div style="font-family:sans-serif; font-size:12px; min-width:175px;">
+          <strong style="font-size:14px;">Línea ${bus.linea}</strong>
+          <span style="color:#666; font-size:11px;">(${bus.ramal})</span><br>
+          <span style="color:${colorSentido}; font-weight:800;">${bus.sentido}</span>
+          ${estadoHTML}
+          ${desvioHTML}
+          <div style="margin-top:5px; padding-top:4px; border-top:1px solid #ddd; font-size:11px; color:#222;">
+            📍 <strong>Próxima:</strong> ${proxParada}
+          </div>
+        </div>
+      `;
+    }
+
+    function construirIcono(bus) {
+      let clase = "bus-marker-50b";
+      if (bus.linea === "50A") clase = "bus-marker-50a";
+      if (bus.linea === "50R") clase = "bus-marker-50r";
+      if (bus.linea === "URBANO") clase = "bus-marker-urbano";
+      if (bus.linea.includes("52")) clase = "bus-marker-52";
+
+      let estadoClase = "";
+      let iconoPrefijo = "🚌";
+      if (bus.cabecera && bus.edad_senal > 45) {
+        estadoClase = "bus-cabecera";
+        iconoPrefijo = "⏸️";
+      } else if (bus.edad_senal > 180) {
+        estadoClase = "bus-stalled";
+        iconoPrefijo = "🚨";
+      } else if (bus.edad_senal >= 45) {
+        estadoClase = "bus-weak";
+        iconoPrefijo = "📡";
+      }
+
+      return L.divIcon({
+        className: 'custom-icon',
+        html: `<div class="bus-marker ${clase} ${estadoClase}">${iconoPrefijo} ${bus.linea}</div>`,
+        iconSize: [72, 24],
+        iconAnchor: [36, 12]
+      });
+    }
+
+    // Motor de simulación continua a 60 FPS
+    let ultimoFrame = performance.now();
+    function loopFisicoContinuo(ahoraMs) {
+      const dt = Math.min((ahoraMs - ultimoFrame) / 1000.0, 0.25);
+      ultimoFrame = ahoraMs;
+
+      for (const id in busesSim) {
+        const b = busesSim[id];
+
+        // Incrementar suavemente la edad de señal entre consultas
+        b.edad_senal += dt;
+
+        // 1. Si está en cabecera sin señal o supera los 3 minutos sin señal, no avanza
+        if ((b.cabecera && b.edad_senal > 45) || b.edad_senal > 180) {
+          continue;
+        }
+
+        // 2. Verificar pausa en semáforos
+        if (b.pausaHastaMs && ahoraMs < b.pausaHastaMs) {
+          b.enSemaforo = true;
+          continue;
+        } else {
+          b.enSemaforo = false;
+        }
+
+        for (let s = 0; s < SEMAFOROS.length; s++) {
+          const sem = SEMAFOROS[s];
+          if (distMts(b.simLat, b.simLon, sem[0], sem[1]) < 20) {
+            if (b.ultimoSemaforoIdx !== s) {
+              b.ultimoSemaforoIdx = s;
+              // 45% de probabilidad de encontrar el semáforo en rojo (pausa de 7 a 13 seg)
+              if (Math.random() < 0.45) {
+                b.pausaHastaMs = ahoraMs + (7000 + Math.random() * 6000);
+                b.enSemaforo = true;
+                break;
+              }
+            }
+          }
+        }
+        if (b.enSemaforo) continue;
+
+        // 3. Calcular velocidad de avance (más conservadora si tiene señal débil)
+        const factorSenal = b.edad_senal >= 45 ? 0.65 : 0.92;
+        const velMps = ((b.vel_kmh || 32) / 3.6) * factorSenal;
+        let avanceMts = velMps * dt;
+
+        const traza = (RUTAS_DENSAS[b.linea] && RUTAS_DENSAS[b.linea][b.sentido_code]) || [];
+
+        // 4. Detectar si está en la zona de desvío de Av. Mosconi (al Este de Jumbo: lon > -68.088)
+        const infoCercana = traza.length > 0 ? encontrarIndiceMasCercano(b.simLat, b.simLon, traza) : { index: 0, dist: 999 };
+        b.enDesvioMosconi = (b.simLon > -68.088 && infoCercana.dist > 45);
+
+        if (traza.length > 1 && !b.enDesvioMosconi && infoCercana.dist < 180) {
+          // Seguir la polilínea real del recorrido punto por punto
+          let idx = infoCercana.index;
+          while (avanceMts > 0 && idx < traza.length - 1) {
+            const sig = traza[idx + 1];
+            const dSeg = distMts(b.simLat, b.simLon, sig[0], sig[1]);
+            if (dSeg <= avanceMts) {
+              b.simLat = sig[0];
+              b.simLon = sig[1];
+              avanceMts -= dSeg;
+              idx++;
+            } else {
+              const frac = avanceMts / dSeg;
+              b.simLat += (sig[0] - b.simLat) * frac;
+              b.simLon += (sig[1] - b.simLon) * frac;
+              avanceMts = 0;
+            }
+          }
+        } else {
+          // En zona de desvío de Mosconi (post-Jumbo), avanzar por la grilla de calles paralelas
+          const dirLon = b.sentido_code === "HACIA_NEUQUEN" ? 1 : -1;
+          const dLonGrados = (avanceMts / (111139 * 0.777)) * dirLon;
+          b.simLon += dLonGrados;
+        }
+
+        // Corrección suave hacia el último punto GPS real si acaba de actualizarse
+        if (b.edad_senal < 12) {
+          const err = distMts(b.simLat, b.simLon, b.gpsLat, b.gpsLon);
+          if (err > 15 && err < 600) {
+            b.simLat += (b.gpsLat - b.simLat) * 0.04;
+            b.simLon += (b.gpsLon - b.simLon) * 0.04;
+          }
+        }
+
+        b.marker.setLatLng([b.simLat, b.simLon]);
+      }
+
+      requestAnimationFrame(loopFisicoContinuo);
     }
 
     function mostrarRuta(linea, sentidoCode) {
@@ -501,56 +796,79 @@ HTML_COMPLETO = """
         const r = await fetch('/api/radar');
         const d = await r.json();
         document.getElementById('status').innerText = `Actualizado: ${d.timestamp}`;
-        actualizarBuses(d.buses);
+        sincronizarBuses(d.buses);
       } catch (e) {}
     }
 
-    function actualizarBuses(buses) {
+    function sincronizarBuses(buses) {
       const label = document.getElementById('bus-count');
-      label.innerText = buses.length > 0 ? `🚌 ${buses.length} colectivos en vivo` : "Buscando unidades en recorrido...";
+      const enVivo = buses.filter(b => b.edad_senal <= 180).length;
+      label.innerText = buses.length > 0
+        ? `🚌 ${enVivo} activos en recorrido (${buses.length} en radar)`
+        : "Buscando unidades en recorrido...";
 
       const idsActivos = new Set();
+
       buses.forEach(b => {
         idsActivos.add(b.id);
-        let clase = "bus-marker-50b";
-        if (b.linea === "50A") clase = "bus-marker-50a";
-        if (b.linea === "50R") clase = "bus-marker-50r";
-        if (b.linea === "URBANO") clase = "bus-marker-urbano";
-        if (b.linea.includes("52")) clase = "bus-marker-52";
 
-        const icon = L.divIcon({
-          className: 'custom-icon',
-          html: `<div class="bus-marker ${clase}">🚌 ${b.linea}</div>`,
-          iconSize: [68, 24], iconAnchor: [34, 12]
-        });
+        if (busesSim[b.id]) {
+          const sim = busesSim[b.id];
+          const saltoGps = distMts(sim.gpsLat, sim.gpsLon, b.lat, b.lon);
 
-        const colorSentido = b.sentido_code === 'HACIA_NEUQUEN' ? '#FAB387' : '#A6E3A1';
-        const popup = `
-          <div style="font-family:sans-serif; font-size:12px;">
-            <strong style="font-size:14px;">Línea ${b.linea}</strong><br>
-            <span style="color:${colorSentido}; font-weight:700;">${b.sentido}</span><br>
-            <span style="color:#666;">${b.ramal}</span>
-            <div style="color:#27ae60; font-weight:bold; margin-top:4px;">⏱️ Arribo: ${b.tiempo_arribo || 'En camino'}</div>
-          </div>
-        `;
+          sim.gpsLat = b.lat;
+          sim.gpsLon = b.lon;
+          sim.vel_kmh = b.vel_kmh || sim.vel_kmh;
+          sim.sentido = b.sentido;
+          sim.sentido_code = b.sentido_code;
+          sim.ramal = b.ramal;
+          sim.cabecera = b.cabecera;
+          sim.edad_senal = b.edad_senal;
 
-        if (marcadoresBuses[b.id]) {
-          deslizarMarcador(marcadoresBuses[b.id], b.lat, b.lon);
-          marcadoresBuses[b.id].getPopup().setContent(popup);
-          marcadoresBuses[b.id].off('click').on('click', () => mostrarRuta(b.linea, b.sentido_code));
+          // Si llegó un paquete GPS nuevo y el colectivo ya cruzó el semáforo, liberar pausa
+          if (saltoGps > 25) {
+            sim.pausaHastaMs = 0;
+            // Si la diferencia con la simulación es grande, reacomodar suavemente
+            if (distMts(sim.simLat, sim.simLon, b.lat, b.lon) > 220) {
+              sim.simLat = b.lat;
+              sim.simLon = b.lon;
+            }
+          }
+
+          sim.marker.setIcon(construirIcono(sim));
+          sim.marker.getPopup().setContent(generarHTMLPopup(sim));
+          sim.marker.off('click').on('click', () => {
+            sim.marker.getPopup().setContent(generarHTMLPopup(sim));
+            mostrarRuta(sim.linea, sim.sentido_code);
+          });
         } else {
-          const m = L.marker([b.lat, b.lon], { icon: icon });
-          m.bindPopup(popup);
-          m.on('click', () => mostrarRuta(b.linea, b.sentido_code));
+          const nuevoSim = {
+            ...b,
+            simLat: b.lat,
+            simLon: b.lon,
+            gpsLat: b.lat,
+            gpsLon: b.lon,
+            enSemaforo: false,
+            enDesvioMosconi: false,
+            pausaHastaMs: 0,
+            ultimoSemaforoIdx: -1
+          };
+          const m = L.marker([b.lat, b.lon], { icon: construirIcono(nuevoSim) });
+          m.bindPopup(generarHTMLPopup(nuevoSim));
+          m.on('click', () => {
+            m.getPopup().setContent(generarHTMLPopup(nuevoSim));
+            mostrarRuta(nuevoSim.linea, nuevoSim.sentido_code);
+          });
           m.addTo(map);
-          marcadoresBuses[b.id] = m;
+          nuevoSim.marker = m;
+          busesSim[b.id] = nuevoSim;
         }
       });
 
-      for (let id in marcadoresBuses) {
+      for (let id in busesSim) {
         if (!idsActivos.has(id)) {
-          map.removeLayer(marcadoresBuses[id]);
-          delete marcadoresBuses[id];
+          map.removeLayer(busesSim[id].marker);
+          delete busesSim[id];
         }
       }
     }
