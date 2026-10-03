@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import json
 import math
@@ -91,20 +92,21 @@ PARADAS_CLUSTERIZADAS = agrupar_paradas(PARADAS_RAW)
 
 URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
 
-# Paradas terminales y estratégicas para capturar todas las unidades en ambos sentidos
+# Paradas exclusivas de cada sentido para no duplicar IDA/VUELTA en el bucle de cabecera
 PARADAS_RADAR = [
-    ("NV1102", "1013", "50A"),
-    ("NV1244", "1013", "50A"),
-    ("NV1012", "1013", "50A"),
-    ("NV4120", "1014", "50B"),
-    ("NV2249", "1014", "50B"),
-    ("NV2258", "1014", "50B"),
-    ("NV 4998", "1015", "50R"),
-    ("NV6000", "1015", "50R"),
-    ("NV5019", "1015", "50R"),
+    ("NV4120", "1013", "50A"),      # 50A exclusivo IDA (llegando a Neuquén)
+    ("NV1012", "1013", "50A"),      # 50A exclusivo IDA (Ruta 22)
+    ("NV8039", "1013", "50A"),      # 50A exclusivo VUELTA (Av. San Martín Plottier)
+    ("NV1027", "1013", "50A"),      # 50A exclusivo VUELTA (Ruta 22 hacia Plottier)
+    ("NV4120", "1014", "50B"),      # 50B exclusivo IDA (llegando a Neuquén)
+    ("NV1012", "1014", "50B"),      # 50B exclusivo IDA (Ruta 22)
+    ("NV1173", "1014", "50B"),      # 50B exclusivo VUELTA (Av. del Trabajo Plottier)
+    ("NV1027", "1014", "50B"),      # 50B exclusivo VUELTA (Ruta 22 hacia Plottier)
+    ("NV 4998", "1015", "50R"),     # 50R exclusivo IDA (Neuquén)
+    ("NV6001", "1015", "50R"),      # 50R exclusivo VUELTA (Las Perlas)
+    ("NV5019", "1015", "50R"),      # 50R Plottier
     ("NV8064", "1109", "URBANO"),
     ("51 00001", "1109", "URBANO"),
-    ("NV2258", "1109", "URBANO"),
     ("5200001", "1079", "52 CENTRO"),
     ("5200047", "1079", "52 CENTRO"),
     ("5200001", "1080", "52 UNION"),
@@ -147,18 +149,55 @@ def normalizar_linea(linea_raw):
         return "52 CENTRO"
     return lin
 
-def deducir_sentido_real(ramal_raw, sentido_worker=""):
+def extraer_minutos(tiempo_str):
+    """Extrae los minutos numéricos de un texto como '21 min. aprox.' para priorizar el viaje actual."""
+    m = re.search(r'(\d+)', str(tiempo_str or ""))
+    return int(m.group(1)) if m else 999
+
+def filtrar_arribos_unicos(arribos, linea):
+    """
+    Si una parada compartida devuelve el mismo colectivo dos veces (ej. primero como VUELTA en 20 min
+    y luego como IDA en 38 min), conserva únicamente el viaje actual (el de menor tiempo).
+    """
+    ordenados = sorted(arribos, key=lambda a: extraer_minutos(a.get("tiempo") or a.get("tiempo_arribo")))
+    unicos = []
+    for a in ordenados:
+        try:
+            lat = float(a.get("lat") or 0)
+            lon = float(a.get("lon") or 0)
+        except (ValueError, TypeError):
+            continue
+        if not lat or not lon:
+            continue
+        duplicado = False
+        for u in unicos:
+            if distancia_km(lat, lon, float(u["lat"]), float(u["lon"])) < 0.05:
+                duplicado = True
+                break
+        if not duplicado:
+            unicos.append({**a, "linea": linea})
+    return unicos
+
+def deducir_sentido_bandera(ramal_raw):
+    """Deduce el sentido únicamente si el nombre de la bandera indica explícitamente IDA o VUELTA."""
     txt = str(ramal_raw or "").upper()
-    if "IDA" in txt:
-        return "Hacia Neuquén", "HACIA_NEUQUEN"
     if "VUELTA" in txt or "VTA" in txt:
         return "Hacia Plottier", "HACIA_PLOTTIER"
-    sw = str(sentido_worker or "").upper()
-    if "NEUQU" in sw:
-        return "Hacia Plottier", "HACIA_PLOTTIER"
-    if "PLOTTIER" in sw:
+    if "IDA" in txt:
         return "Hacia Neuquén", "HACIA_NEUQUEN"
     return None, None
+
+def deducir_sentido_geometria(linea, lat, lon):
+    """Compara a qué traza (HACIA_NEUQUEN o HACIA_PLOTTIER) está físicamente más cerca la unidad."""
+    if linea not in TRAZAS_GEO:
+        return None, None, 99, 99
+    pts_nqn = TRAZAS_GEO[linea].get("HACIA_NEUQUEN", [])
+    pts_plo = TRAZAS_GEO[linea].get("HACIA_PLOTTIER", [])
+    d_nqn = min([distancia_km(lat, lon, p[0], p[1]) for p in pts_nqn], default=99)
+    d_plo = min([distancia_km(lat, lon, p[0], p[1]) for p in pts_plo], default=99)
+    if d_plo < d_nqn:
+        return "Hacia Plottier", "HACIA_PLOTTIER", d_nqn, d_plo
+    return "Hacia Neuquén", "HACIA_NEUQUEN", d_nqn, d_plo
 
 def procesar_nuevas_posiciones(detecciones):
     global ESTADO_GLOBAL
@@ -174,7 +213,8 @@ def procesar_nuevas_posiciones(detecciones):
         if not lat or not lon or not linea:
             continue
 
-        sentido_fijo, code_fijo = deducir_sentido_real(d.get("ramal"), d.get("sentido"))
+        sentido_bandera, code_bandera = deducir_sentido_bandera(d.get("ramal"))
+        sentido_geo, code_geo, d_nqn, d_plo = deducir_sentido_geometria(linea, lat, lon)
 
         bus_match_id = None
         min_dist = 1.8
@@ -191,9 +231,11 @@ def procesar_nuevas_posiciones(detecciones):
             delta_lon = lon - bus["lon"]
             dt = max(ahora - bus["last_gps_at"], 1.0)
 
-            if sentido_fijo:
-                sentido = sentido_fijo
-                sentido_code = code_fijo
+            # 1. Si el colectivo está en un tramo exclusivo de una traza (ej. Autovía vs Av. del Trabajo), manda la traza
+            if abs(d_nqn - d_plo) > 0.08:
+                sentido = sentido_geo
+                sentido_code = code_geo
+            # 2. Si se desplazó más de 25 metros en sentido Este-Oeste, manda el movimiento físico real del GPS
             elif abs(delta_lon) > 0.0003:
                 if delta_lon < 0:
                     sentido = "Hacia Plottier"
@@ -201,11 +243,14 @@ def procesar_nuevas_posiciones(detecciones):
                 else:
                     sentido = "Hacia Neuquén"
                     sentido_code = "HACIA_NEUQUEN"
+            # 3. Si no se movió lo suficiente aún, usar bandera explícita o mantener el actual
+            elif sentido_bandera:
+                sentido = sentido_bandera
+                sentido_code = code_bandera
             else:
                 sentido = bus["sentido"]
                 sentido_code = bus["sentido_code"]
 
-            # Si el GPS realmente reportó una coordenada nueva (> 12 metros)
             if dist_avance > 0.012:
                 vel_calc = (dist_avance / dt) * 3600.0
                 vel_kmh = round(max(18.0, min(vel_calc, 58.0)), 1)
@@ -218,12 +263,18 @@ def procesar_nuevas_posiciones(detecciones):
                     "last_gps_at": ahora
                 })
             else:
-                # Si sigue reportando en el sistema sin cambio de coordenadas aún, mantener señal activa
                 if ahora - bus["last_gps_at"] < 120:
                     bus["last_gps_at"] = max(bus["last_gps_at"], ahora - 25)
 
+            ramal_actual = d.get("ramal") or bus.get("ramal") or f"Línea {linea}"
+            # Ajustar nombre de ramal si había quedado invertido por parada compartida
+            if sentido_code == "HACIA_PLOTTIER" and "IDA" in str(ramal_actual).upper():
+                ramal_actual = str(ramal_actual).replace("IDA", "VUELTA")
+            elif sentido_code == "HACIA_NEUQUEN" and "VUELTA" in str(ramal_actual).upper():
+                ramal_actual = str(ramal_actual).replace("VUELTA", "IDA")
+
             bus.update({
-                "ramal": d.get("ramal") or bus.get("ramal"),
+                "ramal": ramal_actual,
                 "sentido": sentido,
                 "sentido_code": sentido_code,
                 "cabecera": detectar_cabecera(lat, lon),
@@ -233,20 +284,15 @@ def procesar_nuevas_posiciones(detecciones):
             nuevo_id = f"{linea}_{ESTADO_GLOBAL['contador_ids']}"
             ESTADO_GLOBAL["contador_ids"] += 1
 
-            if sentido_fijo:
-                sentido = sentido_fijo
-                sentido_code = code_fijo
+            if abs(d_nqn - d_plo) > 0.06:
+                sentido = sentido_geo
+                sentido_code = code_geo
+            elif sentido_bandera:
+                sentido = sentido_bandera
+                sentido_code = code_bandera
             else:
-                sentido = "Hacia Plottier"
-                sentido_code = "HACIA_PLOTTIER"
-                if linea in TRAZAS_GEO:
-                    pts_nqn = TRAZAS_GEO[linea].get("HACIA_NEUQUEN", [])
-                    pts_plo = TRAZAS_GEO[linea].get("HACIA_PLOTTIER", [])
-                    d_nqn = min([distancia_km(lat, lon, p[0], p[1]) for p in pts_nqn], default=99)
-                    d_plo = min([distancia_km(lat, lon, p[0], p[1]) for p in pts_plo], default=99)
-                    if d_nqn < d_plo:
-                        sentido = "Hacia Neuquén"
-                        sentido_code = "HACIA_NEUQUEN"
+                sentido = sentido_geo or "Hacia Plottier"
+                sentido_code = code_geo or "HACIA_PLOTTIER"
 
             ESTADO_GLOBAL["buses"][nuevo_id] = {
                 "id": nuevo_id,
@@ -264,7 +310,7 @@ def procesar_nuevas_posiciones(detecciones):
                 "updated_at": ahora
             }
 
-    # Mantener unidades hasta 8 minutos (480s) para cubrir los tramos de +3 min (débil) y +4 min (detenido)
+    # Mantener unidades hasta 8 minutos (480s)
     ESTADO_GLOBAL["buses"] = {
         k: v for k, v in ESTADO_GLOBAL["buses"].items()
         if ahora - v["last_gps_at"] < 480
@@ -298,10 +344,7 @@ def ejecutar_paso_radar(cantidad_paradas=5):
                 )
                 if rp.status_code == 200:
                     arribos = rp.json().get("arribos", [])
-                    procesar_nuevas_posiciones([
-                        {**a, "linea": p_lin}
-                        for a in arribos if a.get("lat") and a.get("lon")
-                    ])
+                    procesar_nuevas_posiciones(filtrar_arribos_unicos(arribos, p_lin))
             except Exception:
                 pass
 
@@ -327,7 +370,7 @@ def ruta_cron_ok():
     """
     Ventana ultraliviana para Cron-Job:
     Dispara en segundo plano la consulta de arribos de todos los colectivos como un usuario normal
-    y devuelve una página blanca mínima que dice 'ok' para no saturar cron-job.org.
+    y devuelve una página blanca mínima que dice 'ok' (sin Google Analytics para no inflar métricas).
     """
     if time.time() - ESTADO_GLOBAL.get("ultimo_escaneo", 0) > 4:
         Thread(target=ejecutar_paso_radar, args=(8,), daemon=True).start()
@@ -366,14 +409,11 @@ def api_parada():
             data = r.json()
             arribos = data.get("arribos", [])
             for a in arribos:
-                sent_real, _ = deducir_sentido_real(a.get("ramal"), a.get("sentido"))
+                sent_real, _ = deducir_sentido_bandera(a.get("ramal"))
                 if sent_real:
                     a["sentido"] = sent_real
 
-            procesar_nuevas_posiciones([
-                {**a, "linea": p_linea}
-                for a in arribos if a.get("lat") and a.get("lon")
-            ])
+            procesar_nuevas_posiciones(filtrar_arribos_unicos(arribos, p_linea))
             return jsonify({"arribos": arribos})
     except Exception:
         pass
@@ -411,6 +451,16 @@ HTML_COMPLETO = """
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Transporte Plottier - En Vivo</title>
+
+  <!-- Google tag (gtag.js) - Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-CE85R9NET5"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-CE85R9NET5');
+  </script>
+
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -612,8 +662,9 @@ HTML_COMPLETO = """
     let PARADAS_LISTA = [];
     let mostrandoParadas = true;
 
-    const LIMITE_DEBIL_SEG = 180;  // 3 minutos (180s) para empezar a titilar como "Señal débil"
-    const LIMITE_AVERIA_SEG = 240; // 4 minutos (240s) para detenerse por pérdida de señal
+    const LIMITE_DEBIL_SEG = 180;      // 3 minutos (180s) para empezar a titilar como "Señal débil"
+    const LIMITE_AVERIA_SEG = 240;     // 4 minutos (240s) para detenerse por pérdida de señal
+    const DIST_MAX_EN_RUTA_MTS = 35;   // Si el colectivo se aleja más de 35m de la ruta, se apaga el 60fps
 
     // Semáforos reales del corredor Plottier - Ruta 22 - Av. Mosconi - Neuquén
     const SEMAFOROS = [
@@ -651,7 +702,7 @@ HTML_COMPLETO = """
       for (let i = 0; i < pts.length - 1; i++) {
         const p1 = pts[i], p2 = pts[i + 1];
         const d = distMts(p1[0], p1[1], p2[0], p2[1]);
-        const pasos = Math.max(1, Math.ceil(d / 20));
+        const pasos = Math.max(1, Math.ceil(d / 18));
         for (let s = 1; s <= pasos; s++) {
           const t = s / pasos;
           res.push([p1[0] + (p2[0] - p1[0]) * t, p1[1] + (p2[1] - p1[1]) * t]);
@@ -670,6 +721,47 @@ HTML_COMPLETO = """
         }
       }
       return { index: minIdx, dist: minDist };
+    }
+
+    // Verifica si las coordenadas GPS reales del colectivo están sobre la ruta programada
+    function estaEnRutaProgramada(lat, lon, linea, sentidoCode) {
+      const traza = (RUTAS_DENSAS[linea] && RUTAS_DENSAS[linea][sentidoCode]) || [];
+      if (traza.length < 2) return false;
+      const info = encontrarIndiceMasCercano(lat, lon, traza);
+      return info.dist <= DIST_MAX_EN_RUTA_MTS;
+    }
+
+    // Animación clásica punto-a-punto (se usa cuando el colectivo se sale del recorrido programado)
+    function deslizarMarcador(bus, destLat, destLon) {
+      const from = bus.marker.getLatLng();
+      const to = L.latLng(destLat, destLon);
+      if (from.distanceTo(to) < 1) {
+        bus.simLat = destLat;
+        bus.simLon = destLon;
+        return;
+      }
+      if (from.distanceTo(to) > 2500) {
+        bus.marker.setLatLng(to);
+        bus.simLat = destLat;
+        bus.simLon = destLon;
+        return;
+      }
+
+      let start = null;
+      const duration = 1200;
+
+      function step(timestamp) {
+        if (bus.enRuta) return; // Si volvió a entrar a la ruta, el motor 60fps toma el control
+        if (!start) start = timestamp;
+        const progress = Math.min((timestamp - start) / duration, 1);
+        const lat = from.lat + (to.lat - from.lat) * progress;
+        const lon = from.lng + (to.lng - from.lng) * progress;
+        bus.simLat = lat;
+        bus.simLon = lon;
+        bus.marker.setLatLng([lat, lon]);
+        if (progress < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
     }
 
     function calcularProximaParada(bus) {
@@ -787,15 +879,11 @@ HTML_COMPLETO = """
         const minDebil = Math.floor(bus.edad_senal / 60);
         const segDebil = Math.round(bus.edad_senal % 60);
         estadoHTML = `<div style="color:#d35400; font-weight:700; margin-top:4px;">⚠️ Señal débil (${minDebil}m ${segDebil}s)<br><span style="font-weight:normal; font-size:11px; color:#555;">Estimando avance sobre el recorrido</span></div>`;
-      } else if (bus.enSemaforo) {
+      } else if (bus.enSemaforo && bus.enRuta) {
         estadoHTML = `<div style="color:#e67e22; font-weight:700; margin-top:4px;">🚦 Detenido en semáforo</div>`;
       } else {
         estadoHTML = `<div style="color:#27ae60; font-weight:700; margin-top:4px;">🟢 En movimiento (~${Math.round(bus.vel_kmh || 34)} km/h)</div>`;
       }
-
-      const desvioHTML = bus.enDesvioMosconi
-        ? `<div style="color:#8e44ad; font-size:11px; font-weight:700; margin-top:2px;">🚧 Desvío obras Av. Mosconi (traza alternativa)</div>`
-        : '';
 
       const proxParada = calcularProximaParada(bus);
 
@@ -805,7 +893,6 @@ HTML_COMPLETO = """
           <span style="color:#666; font-size:11px;">(${bus.ramal})</span><br>
           <span style="color:${colorSentido}; font-weight:800;">${bus.sentido}</span>
           ${estadoHTML}
-          ${desvioHTML}
           <div style="margin-top:5px; padding-top:4px; border-top:1px solid #ddd; font-size:11px; color:#222;">
             📍 <strong>Próxima:</strong> ${proxParada}
           </div>
@@ -849,7 +936,7 @@ HTML_COMPLETO = """
       });
     }
 
-    // Motor de simulación continua a 60 FPS
+    // Motor de simulación continua a 60 FPS (solo actúa si el colectivo está dentro de su ruta programada)
     let ultimoFrame = performance.now();
     function loopFisicoContinuo(ahoraMs) {
       const dt = Math.min((ahoraMs - ultimoFrame) / 1000.0, 0.25);
@@ -860,11 +947,16 @@ HTML_COMPLETO = """
 
         b.edad_senal += dt;
 
-        // Actualizar icono automáticamente si cambia de estado (ej. al cruzar los 3 min o 4 min)
         const nuevoEst = obtenerEstadoVisual(b);
         if (b.estadoVisual !== nuevoEst) {
           b.estadoVisual = nuevoEst;
           b.marker.setIcon(construirIcono(b));
+        }
+
+        // Si el colectivo se salió de su ruta programada, el seguimiento 60fps queda desactivado
+        if (!b.enRuta) {
+          b.enSemaforo = false;
+          continue;
         }
 
         // 1. Si está en cabecera sin señal o supera los 4 minutos (240s) sin señal, se detiene
@@ -872,7 +964,12 @@ HTML_COMPLETO = """
           continue;
         }
 
-        // 2. Verificar pausa en semáforos
+        // 2. No adelantar más de 220 metros respecto al último punto GPS real confirmado
+        if (distMts(b.simLat, b.simLon, b.gpsLat, b.gpsLon) > 220) {
+          continue;
+        }
+
+        // 3. Verificar pausa en semáforos
         if (b.pausaHastaMs && ahoraMs < b.pausaHastaMs) {
           b.enSemaforo = true;
           continue;
@@ -895,45 +992,34 @@ HTML_COMPLETO = """
         }
         if (b.enSemaforo) continue;
 
-        // 3. Calcular velocidad de avance (más conservadora cuando pasa los 3 min sin señal)
-        const factorSenal = b.edad_senal >= LIMITE_DEBIL_SEG ? 0.65 : 0.90;
+        // 4. Avanzar suavemente sobre los puntos de la ruta programada
+        const factorSenal = b.edad_senal >= LIMITE_DEBIL_SEG ? 0.60 : 0.85;
         const velMps = ((b.vel_kmh || 32) / 3.6) * factorSenal;
         let avanceMts = velMps * dt;
 
         const traza = (RUTAS_DENSAS[b.linea] && RUTAS_DENSAS[b.linea][b.sentido_code]) || [];
+        if (traza.length < 2) continue;
 
-        // 4. Detectar si está en la zona de desvío de Av. Mosconi (al Este de Jumbo: lon > -68.088)
-        const infoCercana = traza.length > 0 ? encontrarIndiceMasCercano(b.simLat, b.simLon, traza) : { index: 0, dist: 999 };
-        b.enDesvioMosconi = (b.simLon > -68.088 && infoCercana.dist > 45);
-
-        if (traza.length > 1 && !b.enDesvioMosconi && infoCercana.dist < 180) {
-          let idx = infoCercana.index;
-          while (avanceMts > 0 && idx < traza.length - 1) {
-            const sig = traza[idx + 1];
-            const dSeg = distMts(b.simLat, b.simLon, sig[0], sig[1]);
-            if (dSeg <= avanceMts) {
-              b.simLat = sig[0];
-              b.simLon = sig[1];
-              avanceMts -= dSeg;
-              idx++;
-            } else {
-              const frac = avanceMts / dSeg;
-              b.simLat += (sig[0] - b.simLat) * frac;
-              b.simLon += (sig[1] - b.simLon) * frac;
-              avanceMts = 0;
-            }
-          }
-        } else {
-          const dirLon = b.sentido_code === "HACIA_NEUQUEN" ? 1 : -1;
-          const dLonGrados = (avanceMts / (111139 * 0.777)) * dirLon;
-          b.simLon += dLonGrados;
+        const infoCercana = encontrarIndiceMasCercano(b.simLat, b.simLon, traza);
+        if (infoCercana.dist > DIST_MAX_EN_RUTA_MTS) {
+          b.enRuta = false;
+          continue;
         }
 
-        if (b.edad_senal < 15) {
-          const err = distMts(b.simLat, b.simLon, b.gpsLat, b.gpsLon);
-          if (err > 15 && err < 600) {
-            b.simLat += (b.gpsLat - b.simLat) * 0.04;
-            b.simLon += (b.gpsLon - b.simLon) * 0.04;
+        let idx = infoCercana.index;
+        while (avanceMts > 0 && idx < traza.length - 1) {
+          const sig = traza[idx + 1];
+          const dSeg = distMts(b.simLat, b.simLon, sig[0], sig[1]);
+          if (dSeg <= avanceMts) {
+            b.simLat = sig[0];
+            b.simLon = sig[1];
+            avanceMts -= dSeg;
+            idx++;
+          } else {
+            const frac = avanceMts / dSeg;
+            b.simLat += (sig[0] - b.simLat) * frac;
+            b.simLon += (sig[1] - b.simLon) * frac;
+            avanceMts = 0;
           }
         }
 
@@ -995,6 +1081,7 @@ HTML_COMPLETO = """
 
       buses.forEach(b => {
         idsActivos.add(b.id);
+        const dentroDeRuta = estaEnRutaProgramada(b.lat, b.lon, b.linea, b.sentido_code);
 
         if (busesSim[b.id]) {
           const sim = busesSim[b.id];
@@ -1008,13 +1095,17 @@ HTML_COMPLETO = """
           sim.ramal = b.ramal;
           sim.cabecera = b.cabecera;
           sim.edad_senal = b.edad_senal;
+          sim.enRuta = dentroDeRuta;
 
-          if (saltoGps > 25) {
+          if (!dentroDeRuta) {
+            // Fuera de la ruta programada: usar el deslizamiento clásico hacia el punto GPS real
+            deslizarMarcador(sim, b.lat, b.lon);
+          } else if (saltoGps > 15) {
             sim.pausaHastaMs = 0;
-            if (distMts(sim.simLat, sim.simLon, b.lat, b.lon) > 220) {
-              sim.simLat = b.lat;
-              sim.simLon = b.lon;
-            }
+            // Sincronizar la posición simulada con el nuevo reporte GPS sobre la ruta
+            sim.simLat = b.lat;
+            sim.simLon = b.lon;
+            sim.marker.setLatLng([b.lat, b.lon]);
           }
 
           const nuevoEst = obtenerEstadoVisual(sim);
@@ -1035,8 +1126,8 @@ HTML_COMPLETO = """
             simLon: b.lon,
             gpsLat: b.lat,
             gpsLon: b.lon,
+            enRuta: dentroDeRuta,
             enSemaforo: false,
-            enDesvioMosconi: false,
             pausaHastaMs: 0,
             ultimoSemaforoIdx: -1,
             estadoVisual: "NORMAL"
