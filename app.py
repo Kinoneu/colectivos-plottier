@@ -76,7 +76,6 @@ PARADAS_CLUSTERIZADAS = agrupar_paradas(PARADAS_RAW)
 
 URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
 
-# Paradas estratégicas vigentes de los nuevos recorridos para alimentar el radar en vivo
 PARADAS_RADAR = [
     ("NV1244", "1013", "50A"),
     ("NV2002", "1013", "50A"),
@@ -117,6 +116,21 @@ def normalizar_linea(linea_raw):
         return "52 CENTRO"
     return lin
 
+def deducir_sentido_real(ramal_raw, sentido_worker=""):
+    """Corrige el sentido invertido que devuelve el Worker viejo."""
+    txt = str(ramal_raw or "").upper()
+    if "IDA" in txt:
+        return "Hacia Neuquén", "HACIA_NEUQUEN"
+    if "VUELTA" in txt or "VTA" in txt:
+        return "Hacia Plottier", "HACIA_PLOTTIER"
+    # Si viene del endpoint raíz del Worker sin nombre de bandera, invertimos el sentido del Worker
+    sw = str(sentido_worker or "").upper()
+    if "NEUQU" in sw:
+        return "Hacia Plottier", "HACIA_PLOTTIER"
+    if "PLOTTIER" in sw:
+        return "Hacia Neuquén", "HACIA_NEUQUEN"
+    return None, None
+
 def procesar_nuevas_posiciones(detecciones):
     global ESTADO_GLOBAL
     ahora = time.time()
@@ -131,6 +145,8 @@ def procesar_nuevas_posiciones(detecciones):
         if not lat or not lon or not linea:
             continue
 
+        sentido_fijo, code_fijo = deducir_sentido_real(d.get("ramal"), d.get("sentido"))
+
         bus_match_id = None
         min_dist = 1.8
         for b_id, b in ESTADO_GLOBAL["buses"].items():
@@ -144,7 +160,11 @@ def procesar_nuevas_posiciones(detecciones):
             bus = ESTADO_GLOBAL["buses"][bus_match_id]
             delta_lon = lon - bus["lon"]
 
-            if abs(delta_lon) > 0.0003:
+            # Priorizar el sentido oficial de la bandera (IDA/VUELTA) si está disponible
+            if sentido_fijo:
+                sentido = sentido_fijo
+                sentido_code = code_fijo
+            elif abs(delta_lon) > 0.0003:
                 if delta_lon < 0:
                     sentido = "Hacia Plottier"
                     sentido_code = "HACIA_PLOTTIER"
@@ -158,6 +178,7 @@ def procesar_nuevas_posiciones(detecciones):
             bus.update({
                 "lat": lat,
                 "lon": lon,
+                "ramal": d.get("ramal") or bus.get("ramal"),
                 "sentido": sentido,
                 "sentido_code": sentido_code,
                 "tiempo_arribo": d.get("tiempo_arribo") or bus.get("tiempo_arribo"),
@@ -167,13 +188,9 @@ def procesar_nuevas_posiciones(detecciones):
             nuevo_id = f"{linea}_{ESTADO_GLOBAL['contador_ids']}"
             ESTADO_GLOBAL["contador_ids"] += 1
 
-            ramal_txt = str(d.get("ramal") or d.get("sentido") or "").upper()
-            if "IDA" in ramal_txt:
-                sentido = "Hacia Neuquén"
-                sentido_code = "HACIA_NEUQUEN"
-            elif "VUELTA" in ramal_txt or "VTA" in ramal_txt:
-                sentido = "Hacia Plottier"
-                sentido_code = "HACIA_PLOTTIER"
+            if sentido_fijo:
+                sentido = sentido_fijo
+                sentido_code = code_fijo
             else:
                 sentido = "Hacia Plottier"
                 sentido_code = "HACIA_PLOTTIER"
@@ -207,7 +224,6 @@ def recolector_fondo():
     global ESTADO_GLOBAL
     idx = 0
     while True:
-        # 1. Intentar lectura general del Worker
         try:
             r = requests.get(URL_WORKER, timeout=8)
             if r.status_code == 200:
@@ -216,7 +232,6 @@ def recolector_fondo():
         except Exception:
             pass
 
-        # 2. Escanear lote rotativo de paradas nuevas vigentes
         lote = [PARADAS_RADAR[(idx + i) % len(PARADAS_RADAR)] for i in range(4)]
         idx = (idx + 4) % len(PARADAS_RADAR)
 
@@ -264,6 +279,12 @@ def api_parada():
         if r.status_code == 200:
             data = r.json()
             arribos = data.get("arribos", [])
+            # Corregir el texto de sentido en cada arribo antes de enviarlo al navegador
+            for a in arribos:
+                sent_real, _ = deducir_sentido_real(a.get("ramal"), a.get("sentido"))
+                if sent_real:
+                    a["sentido"] = sent_real
+
             procesar_nuevas_posiciones([
                 {**a, "linea": p_linea, "tiempo_arribo": a.get("tiempo")}
                 for a in arribos if a.get("lat") and a.get("lon")
@@ -516,6 +537,7 @@ HTML_COMPLETO = """
         if (marcadoresBuses[b.id]) {
           deslizarMarcador(marcadoresBuses[b.id], b.lat, b.lon);
           marcadoresBuses[b.id].getPopup().setContent(popup);
+          marcadoresBuses[b.id].off('click').on('click', () => mostrarRuta(b.linea, b.sentido_code));
         } else {
           const m = L.marker([b.lat, b.lon], { icon: icon });
           m.bindPopup(popup);
