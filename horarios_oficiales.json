@@ -1,0 +1,142 @@
+{
+  "puntos_control": [
+    {
+      "key": "LOTEO_SOCIAL",
+      "nombreOficial": "Loteo Social (Cabecera)",
+      "lat": -38.930393,
+      "lon": -68.252000,
+      "cols50A": [{"idx": 0, "label": "Salida hacia Nqn"}],
+      "cols50B": [{"idx": 0, "label": "Salida hacia Nqn"}]
+    },
+    {
+      "key": "SAN_MARTIN_TRABAJO",
+      "nombreOficial": "San Martín y Av. del Trabajo",
+      "lat": -38.944473,
+      "lon": -68.225598,
+      "cols50A": [{"idx": 1, "label": "Hacia Neuquén"}],
+      "cols50B": [{"idx": 6, "label": "Regreso a Plottier"}]
+    },
+    {
+      "key": "CASA_CULTURA",
+      "nombreOficial": "Casa de la Cultura",
+      "lat": -38.950627,
+      "lon": -68.225753,
+      "cols50A": [{"idx": 7, "label": "Regreso a Plottier"}],
+      "cols50B": [{"idx": 1, "label": "Hacia Neuquén"}]
+    },
+    {
+      "key": "AMANCAY_MUTICIAS",
+      "nombreOficial": "Amancay y Las Muticias",
+      "lat": -38.964520,
+      "lon": -68.243109,
+      "cols50A": [{"idx": 6, "label": "Regreso a Plottier"}],
+      "cols50B": [{"idx": 2, "label": "Hacia Neuquén"}]
+    },
+    {
+      "key": "RUTA22_RIAVITZ",
+      "nombreOficial": "Ruta 22 y Riavitz",
+      "lat": -38.956680,
+      "lon": -68.226224,
+      "cols50A": [{"idx": 5, "label": "Regreso a Plottier"}],
+      "cols50B": []
+    },
+    {
+      "key": "RIO_COLORADO_IDA",
+      "nombreOficial": "Río Colorado y Ruta 22",
+      "lat": -38.956568,
+      "lon": -68.167666,
+      "cols50A": [{"idx": 2, "label": "Hacia Neuquén"}, {"idx": 4, "label": "Hacia Plottier"}],
+      "cols50B": [{"idx": 3, "label": "Hacia Neuquén"}, {"idx": 5, "label": "Hacia Plottier"}]
+    },
+    {
+      "key": "SAN_JUAN_BSAS",
+      "nombreOficial": "San Juan y Buenos Aires (Neuquén)",
+      "lat": -38.944522,
+      "lon": -68.057589,
+      "cols50A": [{"idx": 3, "label": "Cabecera Neuquén"}],
+      "cols50B": [{"idx": 4, "label": "Cabecera Neuquén"}]
+    }
+  ],
+  "orden_paradas": {
+    "50A": {
+      "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
+      "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "RUTA22_RIAVITZ", "AMANCAY_MUTICIAS", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
+    },
+    "50B": {
+      "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "CASA_CULTURA", "AMANCAY_MUTICIAS", "RUTA22_RIAVITZ", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
+      "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
+    },
+    "DEFAULT": {
+      "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "CASA_CULTURA", "RUTA22_RIAVITZ", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
+      "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "RUTA22_RIAVITZ", "CASA_CULTURA", "LOTEO_SOCIAL"]
+    }
+  },
+  "planillas": {
+    "50A_HABIL": {
+      "nombre": "50A Lun a Vie",
+      "columnas": ["Loteo Social", "San Martín y Trabajo", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
+      "especiales": [],
+      "salidas_regulares": [],
+      "deltas": [0, 12, 17, 37, 37, 12, 17, 12, 12],
+      "fila_final": null
+    },
+    "50A_SAB": {
+      "nombre": "50A Sábado",
+      "columnas": ["Loteo Social", "San Martín y Trabajo", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
+      "especiales": [
+        ["04:25", "04:37", "04:54", "05:40", "06:17", "06:29", "06:46", "06:58", "07:10"],
+        ["05:00", "05:12", "05:29", "06:25", "07:02", "07:14", "07:31", "07:43", "07:55"],
+        ["05:45", "05:57", "06:14", "07:10", "07:47", "07:59", "08:16", "08:28", "08:40"],
+        ["06:30", "06:42", "06:59", "07:55", "08:32", "08:44", "09:01", "09:13", "09:25"]
+      ],
+      "salidas_regulares": ["07:22", "08:07", "08:52", "09:37", "10:10", "10:55", "11:40", "12:25", "12:58", "13:43", "14:28", "15:13", "15:46", "16:31", "17:16", "18:01", "18:34", "19:19", "20:04", "20:49", "21:22", "22:07", "22:52"],
+      "deltas": [0, 12, 17, 37, 37, 12, 17, 12, 12],
+      "fila_final": ["23:37", "23:49", "00:06", "00:43", "-", "-", "-", "-", "-"]
+    },
+    "50A_DOM": {
+      "nombre": "50A Domingo",
+      "columnas": ["Loteo Social", "San Martín y Trabajo", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
+      "especiales": [
+        ["05:30", "05:42", "05:59", "07:00", "07:30", "07:45", "08:00", "08:15", "08:27"],
+        ["06:10", "06:22", "06:39", "07:34", "08:04", "08:19", "08:34", "08:49", "09:01"],
+        ["06:50", "07:02", "07:19", "08:14", "08:44", "08:59", "09:14", "09:29", "09:41"]
+      ],
+      "salidas_regulares": ["08:40", "09:30", "10:20", "11:19", "12:09", "12:59", "13:58", "14:48", "15:38", "16:37", "17:27", "18:17", "19:16", "20:06", "20:56", "21:55", "22:45"],
+      "deltas": [0, 12, 17, 30, 30, 15, 15, 15, 12],
+      "fila_final": ["23:35", "23:47", "00:04", "00:34", "-", "-", "-", "-", "-"]
+    },
+    "50B_HABIL": {
+      "nombre": "50B Lun a Vie",
+      "columnas": ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "San Martín y Trabajo", "Loteo Social"],
+      "especiales": [],
+      "salidas_regulares": [],
+      "deltas": [0, 15, 15, 20, 37, 37, 20, 12],
+      "fila_final": null
+    },
+    "50B_SAB": {
+      "nombre": "50B Sábado",
+      "columnas": ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "San Martín y Trabajo", "Loteo Social"],
+      "especiales": [
+        ["04:30", "04:45", "05:00", "05:20", "05:23", "06:00", "06:20", "06:32"],
+        ["05:15", "05:30", "05:45", "06:05", "06:08", "06:45", "07:05", "07:17"],
+        ["06:00", "06:15", "06:30", "06:50", "06:53", "07:30", "07:50", "08:02"],
+        ["06:45", "07:00", "07:15", "07:35", "07:38", "08:15", "08:35", "08:47"]
+      ],
+      "salidas_regulares": ["06:44", "07:29", "08:14", "08:59", "09:32", "10:17", "11:02", "11:47", "12:20", "13:05", "13:50", "14:35", "15:08", "15:53", "16:38", "17:23", "17:56", "18:41", "19:26", "20:11", "20:44", "21:29", "22:14"],
+      "deltas": [0, 15, 15, 20, 37, 37, 20, 12],
+      "fila_final": ["22:59", "23:14", "23:29", "23:49", "00:26", "-", "-", "-"]
+    },
+    "50B_DOM": {
+      "nombre": "50B Domingo",
+      "columnas": ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "San Martín y Trabajo", "Loteo Social"],
+      "especiales": [
+        ["05:40", "05:53", "06:06", "06:26", "06:34", "07:09", "07:29", "07:39"],
+        ["06:20", "06:33", "06:46", "07:06", "07:14", "07:49", "08:09", "08:19"],
+        ["07:00", "07:13", "07:26", "07:46", "07:54", "08:29", "08:49", "08:59"]
+      ],
+      "salidas_regulares": ["07:52", "08:46", "09:36", "10:31", "11:25", "12:15", "13:10", "14:04", "14:54", "15:49", "16:43", "17:33", "18:28", "19:22", "20:12", "21:07", "22:01"],
+      "deltas": [0, 13, 13, 20, 35, 35, 20, 10],
+      "fila_final": ["22:51", "23:04", "23:17", "23:37", "00:12", "-", "-", "-"]
+    }
+  }
+}
