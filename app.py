@@ -13,12 +13,19 @@ app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1. Cargar paradas y trazas con rutas seguras
+# 1. Cargar paradas, trazas y horarios oficiales desde los archivos JSON del repositorio
 with open(os.path.join(BASE_DIR, "paradas_optimizadas.json"), "r", encoding="utf-8") as f:
     PARADAS_RAW = json.load(f)
 
 with open(os.path.join(BASE_DIR, "urbano y r.json"), "r", encoding="utf-8") as f:
     raw_recorridos = json.load(f)["DBCuandoLlega"]["recorridos"]
+
+RUTA_HORARIOS = os.path.join(BASE_DIR, "horarios_oficiales.json")
+if os.path.isfile(RUTA_HORARIOS):
+    with open(RUTA_HORARIOS, "r", encoding="utf-8") as f:
+        HORARIOS_DATA = json.load(f)
+else:
+    HORARIOS_DATA = {"puntos_control": [], "orden_paradas": {}, "planillas": {}}
 
 MAPA_LINEAS = {
     "1013": "50A",
@@ -35,7 +42,6 @@ for rec in raw_recorridos:
     lin = MAPA_LINEAS.get(cod)
     if not lin:
         continue
-    # Con las nuevas cabeceras en Plottier, IDA va hacia Neuquén y VUELTA hacia Plottier
     sentido = "HACIA_NEUQUEN" if "IDA" in rec.get("bandera", "").upper() else "HACIA_PLOTTIER"
     TRAZAS_GEO[lin][sentido] = [
         [round(float(p["latitud"]), 6), round(float(p["longitud"]), 6)]
@@ -43,7 +49,6 @@ for rec in raw_recorridos:
         if p.get("latitud") and p.get("longitud")
     ]
 
-# Cabeceras conocidas donde los colectivos apagan el GPS al terminar el recorrido
 CABECERAS_GEO = [
     (-38.9314, -68.2494, "Cabecera Plottier Norte"),
     (-38.9345, -68.2585, "Cabecera Casa de Té"),
@@ -372,7 +377,6 @@ def ruta_cron_ok():
 @app.route('/logo.png')
 @app.route('/favicon.ico')
 def logo_sitio():
-    """Sirve el logotipo subido a GitHub (logo.png, logo.jpg, etc.) para WhatsApp, Google y pestaña."""
     nombres_logo = [
         "logo.png", "logo.jpg", "logo.jpeg", "logo.webp", "logo.ico",
         "Logo.png", "Logo.jpg", "icono.png", "icono.jpg"
@@ -385,7 +389,6 @@ def logo_sitio():
 
 @app.route('/foto_perfil')
 def foto_perfil():
-    """Sirve la foto de perfil subida a GitHub (perfil.jpg, perfil.png, etc.)."""
     nombres_posibles = [
         "perfil.jpg", "perfil.png", "perfil.jpeg", "perfil.webp",
         "Perfil.jpg", "Perfil.png", "foto.jpg", "foto.png"
@@ -463,7 +466,8 @@ def api_static_data():
     return jsonify({
         "trazas": TRAZAS_GEO,
         "paradas": PARADAS_CLUSTERIZADAS,
-        "paradas_raw": PARADAS_RAW
+        "paradas_raw": PARADAS_RAW,
+        "horarios_oficiales": HORARIOS_DATA
     })
 
 @app.route('/')
@@ -481,13 +485,11 @@ HTML_COMPLETO = """
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Transporte Plottier - Colectivos en Vivo</title>
 
-  <!-- Iconos para Google Search, pestaña del navegador y pantalla de inicio en celulares -->
   <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
   <link rel="icon" type="image/png" sizes="192x192" href="/logo.png">
   <link rel="shortcut icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/logo.png">
 
-  <!-- Meta etiquetas Open Graph para vista previa al compartir en WhatsApp y redes -->
   <meta name="description" content="Ubicación GPS en vivo y horarios oficiales de las líneas 50A, 50B, 50R, 51 Urbano y 52 en Plottier y Neuquén.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Transporte Plottier">
@@ -548,7 +550,6 @@ HTML_COMPLETO = """
       50% { opacity: 0.55; }
     }
 
-    /* Ícono resaltado con tilde para las paradas verificadas de las planillas */
     .stop-featured-pin {
       width: 22px;
       height: 22px;
@@ -705,7 +706,6 @@ HTML_COMPLETO = """
       white-space: nowrap;
     }
 
-    /* 1. Casilla/Columna entera de la zona seleccionada resaltada */
     table.sched-table th.col-zone-active {
       background: #22325A !important;
       color: #FFFFFF !important;
@@ -725,7 +725,6 @@ HTML_COMPLETO = """
       border-bottom: 2px solid #89B4FA !important;
     }
 
-    /* 2. Próximos horarios en la parada seleccionada (verde intenso) */
     table.sched-table td.cell-next-arrival {
       background: #1E3A24 !important;
       color: #A6E3A1 !important;
@@ -733,7 +732,6 @@ HTML_COMPLETO = """
       box-shadow: inset 0 0 0 2px #A6E3A1 !important;
     }
 
-    /* 3. Horarios correspondientes a las próximas paradas de ese mismo colectivo (dorado/ámbar) */
     table.sched-table td.cell-next-stops {
       background: rgba(249, 226, 175, 0.20) !important;
       color: #F9E2AF !important;
@@ -861,18 +859,21 @@ HTML_COMPLETO = """
     <div id="map"></div>
   </div>
 
-  <!-- Desplegable de Planillas de Horarios Oficiales -->
+  <!-- Desplegable de Planillas de Horarios Oficiales (cargado desde horarios_oficiales.json) -->
   <section class="sched-card" id="sched-section">
     <div class="sched-header" onclick="togglePlanillas()">
-      <div class="sched-header-title" id="sched-title-text">📅 Horarios Oficiales Fin de Semana (50A y 50B)</div>
+      <div class="sched-header-title" id="sched-title-text">📅 Horarios Oficiales Indalo (50A, 50B y 50R)</div>
       <button class="sched-header-btn" id="btn-sched-toggle">Ver Planilla ▾</button>
     </div>
     <div class="sched-content" id="sched-panel">
       <div class="sched-tabs">
-        <button class="sched-tab active" data-clave="50A_SAB" onclick="mostrarPlanilla('50A_SAB', this)">50A Sábado</button>
-        <button class="sched-tab" data-clave="50A_DOM" onclick="mostrarPlanilla('50A_DOM', this)">50A Domingo</button>
-        <button class="sched-tab" data-clave="50B_SAB" onclick="mostrarPlanilla('50B_SAB', this)">50B Sábado</button>
-        <button class="sched-tab" data-clave="50B_DOM" onclick="mostrarPlanilla('50B_DOM', this)">50B Domingo</button>
+        <button class="sched-tab active" data-clave="50A_HABIL" onclick="mostrarPlanilla('50A_HABIL')">50A Hábil</button>
+        <button class="sched-tab" data-clave="50A_SAB" onclick="mostrarPlanilla('50A_SAB')">50A Sábado</button>
+        <button class="sched-tab" data-clave="50A_DOM" onclick="mostrarPlanilla('50A_DOM')">50A Domingo</button>
+        <button class="sched-tab" data-clave="50B_HABIL" onclick="mostrarPlanilla('50B_HABIL')">50B Hábil</button>
+        <button class="sched-tab" data-clave="50B_SAB" onclick="mostrarPlanilla('50B_SAB')">50B Sábado</button>
+        <button class="sched-tab" data-clave="50B_DOM" onclick="mostrarPlanilla('50B_DOM')">50B Domingo</button>
+        <button class="sched-tab" data-clave="50R_HABIL" onclick="mostrarPlanilla('50R_HABIL')">50R Hábil y Sáb</button>
       </div>
       <div class="sched-legend" id="sched-legend-box">
         <div class="legend-items">
@@ -926,96 +927,17 @@ HTML_COMPLETO = """
     let RUTAS_GEO = {};
     let RUTAS_DENSAS = {};
     let PARADAS_LISTA = [];
+    let PUNTOS_CONTROL_OFICIALES = [];
+    let ORDEN_PARADAS_OFICIALES = {};
+    let PLANILLAS_INDALO = {};
     let mostrandoParadas = true;
     let planillasAbiertas = false;
-    let clavePlanillaActual = "50A_SAB";
+    let clavePlanillaActual = "50A_HABIL";
     let puntoKeyResaltado = null;
 
-    const LIMITE_DEBIL_SEG = 180;      // 3 minutos (180s) para empezar a titilar como "Señal débil"
-    const LIMITE_AVERIA_SEG = 240;     // 4 minutos (240s) para detenerse por pérdida de señal
-    const DIST_MAX_EN_RUTA_MTS = 35;   // Si se aleja más de 35m de la ruta, 60fps se apaga
-
-    // --- 7 PUNTOS DE CONTROL OFICIALES DE LAS PLANILLAS DE INDALO CON UBICACIÓN CORREGIDA ---
-    const PUNTOS_CONTROL_OFICIALES = [
-      {
-        key: "LOTEO_SOCIAL",
-        nombreOficial: "Loteo Social (Cabecera)",
-        lat: -38.930393, lon: -68.252000, // Aristóbulo del Valle (NV1244)
-        cols50A: [{ idx: 0, label: "Salida hacia Nqn" }],
-        cols50B: [{ idx: 0, label: "Salida hacia Nqn" }]
-      },
-      {
-        key: "SAN_MARTIN_TRABAJO",
-        nombreOficial: "San Martín y Av. del Trabajo",
-        lat: -38.944473, lon: -68.225598, // Av. del Trabajo y Av. San Martín (5200028)
-        cols50A: [{ idx: 1, label: "Hacia Neuquén" }],
-        cols50B: [{ idx: 6, label: "Regreso a Plottier" }]
-      },
-      {
-        key: "CASA_CULTURA",
-        nombreOficial: "Casa de la Cultura",
-        lat: -38.950627, lon: -68.225753, // Av. San Martín y Martellota / Alberdi (NV8039 / NV 1301)
-        cols50A: [{ idx: 7, label: "Regreso a Plottier" }],
-        cols50B: [{ idx: 1, label: "Hacia Neuquén" }]
-      },
-      {
-        key: "AMANCAY_MUTICIAS",
-        nombreOficial: "Amancay y Las Muticias",
-        lat: -38.964520, lon: -68.243109, // Los Canales sur (NV1038)
-        cols50A: [{ idx: 6, label: "Regreso a Plottier" }],
-        cols50B: [{ idx: 2, label: "Hacia Neuquén" }]
-      },
-      {
-        key: "RUTA22_RIAVITZ",
-        nombreOficial: "Ruta 22 y Riavitz",
-        lat: -38.956680, lon: -68.226224, // Riavitz y Buenos Aires Norte / Ruta 22 (NV1066)
-        cols50A: [{ idx: 5, label: "Regreso a Plottier" }],
-        cols50B: []
-      },
-      {
-        key: "RIO_COLORADO_IDA",
-        nombreOficial: "Río Colorado y Ruta 22",
-        lat: -38.956568, lon: -68.167666, // Límite Plottier-Neuquén (NV1012 / NV1027)
-        cols50A: [{ idx: 2, label: "Hacia Neuquén" }, { idx: 4, label: "Hacia Plottier" }],
-        cols50B: [{ idx: 3, label: "Hacia Neuquén" }, { idx: 5, label: "Hacia Plottier" }]
-      },
-      {
-        key: "SAN_JUAN_BSAS",
-        nombreOficial: "San Juan y Buenos Aires (Neuquén)",
-        lat: -38.944522, lon: -68.057589, // Cabecera Centro Neuquén (NV1102)
-        cols50A: [{ idx: 3, label: "Cabecera Neuquén" }],
-        cols50B: [{ idx: 4, label: "Cabecera Neuquén" }]
-      }
-    ];
-
-    // Secuencia ordenada de Paradas Oficiales según línea y sentido para calcular la próxima parada del colectivo
-    const ORDEN_PARADAS_OFICIALES = {
-      "50A": {
-        "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
-        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "RUTA22_RIAVITZ", "AMANCAY_MUTICIAS", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
-      },
-      "50B": {
-        "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "CASA_CULTURA", "AMANCAY_MUTICIAS", "RUTA22_RIAVITZ", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
-        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
-      },
-      "DEFAULT": {
-        "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "CASA_CULTURA", "RUTA22_RIAVITZ", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
-        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "RUTA22_RIAVITZ", "CASA_CULTURA", "LOTEO_SOCIAL"]
-      }
-    };
-
-    // --- BASE DE DATOS EXACTA DE LAS 4 PLANILLAS DE INDALO ---
-    function generarFilasPlanilla(especiales, salidasRegulares, deltas, filaFinal) {
-      const filas = [...especiales];
-      const acum = [];
-      let c = 0;
-      for (const d of deltas) { c += d; acum.push(c); }
-      for (const sal of salidasRegulares) {
-        filas.push(acum.map(m => sumarMinutos(sal, m)));
-      }
-      if (filaFinal) filas.push(filaFinal);
-      return filas;
-    }
+    const LIMITE_DEBIL_SEG = 180;
+    const LIMITE_AVERIA_SEG = 240;
+    const DIST_MAX_EN_RUTA_MTS = 35;
 
     function sumarMinutos(hhmm, mins) {
       const partes = hhmm.split(':');
@@ -1026,66 +948,30 @@ HTML_COMPLETO = """
       return `${h}:${m}`;
     }
 
-    const PLANILLAS_INDALO = {
-      "50A_SAB": {
-        nombre: "50A Sábado",
-        columnas: ["Loteo Social", "San Martín y Trabajo", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
-        filas: generarFilasPlanilla(
-          [
-            ["04:25","04:37","04:54","05:40","06:17","06:29","06:46","06:58","07:10"],
-            ["05:00","05:12","05:29","06:25","07:02","07:14","07:31","07:43","07:55"],
-            ["05:45","05:57","06:14","07:10","07:47","07:59","08:16","08:28","08:40"],
-            ["06:30","06:42","06:59","07:55","08:32","08:44","09:01","09:13","09:25"]
-          ],
-          ["07:22","08:07","08:52","09:37","10:10","10:55","11:40","12:25","12:58","13:43","14:28","15:13","15:46","16:31","17:16","18:01","18:34","19:19","20:04","20:49","21:22","22:07","22:52"],
-          [0, 12, 17, 37, 37, 12, 17, 12, 12],
-          ["23:37","23:49","00:06","00:43","-","-","-","-","-"]
-        )
-      },
-      "50A_DOM": {
-        nombre: "50A Domingo",
-        columnas: ["Loteo Social", "San Martín y Trabajo", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
-        filas: generarFilasPlanilla(
-          [
-            ["05:30","05:42","05:59","07:00","07:30","07:45","08:00","08:15","08:27"],
-            ["06:10","06:22","06:39","07:34","08:04","08:19","08:34","08:49","09:01"],
-            ["06:50","07:02","07:19","08:14","08:44","08:59","09:14","09:29","09:41"]
-          ],
-          ["08:40","09:30","10:20","11:19","12:09","12:59","13:58","14:48","15:38","16:37","17:27","18:17","19:16","20:06","20:56","21:55","22:45"],
-          [0, 12, 17, 30, 30, 15, 15, 15, 12],
-          ["23:35","23:47","00:04","00:34","-","-","-","-","-"]
-        )
-      },
-      "50B_SAB": {
-        nombre: "50B Sábado",
-        columnas: ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "San Martín y Trabajo", "Loteo Social"],
-        filas: generarFilasPlanilla(
-          [
-            ["04:30","04:45","05:00","05:20","05:23","06:00","06:20","06:32"],
-            ["05:15","05:30","05:45","06:05","06:08","06:45","07:05","07:17"],
-            ["06:00","06:15","06:30","06:50","06:53","07:30","07:50","08:02"],
-            ["06:45","07:00","07:15","07:35","07:38","08:15","08:35","08:47"]
-          ],
-          ["06:44","07:29","08:14","08:59","09:32","10:17","11:02","11:47","12:20","13:05","13:50","14:35","15:08","15:53","16:38","17:23","17:56","18:41","19:26","20:11","20:44","21:29","22:14"],
-          [0, 15, 15, 20, 37, 37, 20, 12],
-          ["22:59","23:14","23:29","23:49","00:26","-","-","-"]
-        )
-      },
-      "50B_DOM": {
-        nombre: "50B Domingo",
-        columnas: ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "San Martín y Trabajo", "Loteo Social"],
-        filas: generarFilasPlanilla(
-          [
-            ["05:40","05:53","06:06","06:26","06:34","07:09","07:29","07:39"],
-            ["06:20","06:33","06:46","07:06","07:14","07:49","08:09","08:19"],
-            ["07:00","07:13","07:26","07:46","07:54","08:29","08:49","08:59"]
-          ],
-          ["07:52","08:46","09:36","10:31","11:25","12:15","13:10","14:04","14:54","15:49","16:43","17:33","18:28","19:22","20:12","21:07","22:01"],
-          [0, 13, 13, 20, 35, 35, 20, 10],
-          ["22:51","23:04","23:17","23:37","00:12","-","-","-"]
-        )
+    function expandirPlanillasDesdeJSON(rawPlanillas) {
+      const resultado = {};
+      for (const [clave, cfg] of Object.entries(rawPlanillas || {})) {
+        const filas = [...(cfg.especiales || [])];
+        const acum = [];
+        let c = 0;
+        for (const d of (cfg.deltas || [])) {
+          c += d;
+          acum.push(c);
+        }
+        for (const sal of (cfg.salidas || [])) {
+          filas.push(acum.map(m => sumarMinutos(sal, m)));
+        }
+        if (cfg.fila_final) {
+          filas.push(cfg.fila_final);
+        }
+        resultado[clave] = {
+          nombre: cfg.nombre,
+          columnas: cfg.columnas,
+          filas: filas
+        };
       }
-    };
+      return resultado;
+    }
 
     function obtenerMinutosActualesArgentina() {
       const ahora = new Date();
@@ -1093,15 +979,28 @@ HTML_COMPLETO = """
         timeZone: 'America/Argentina/Buenos_Aires',
         hour: '2-digit', minute: '2-digit', weekday: 'short', hour12: false
       }).formatToParts(ahora);
-      let h = 0, m = 0, wd = 'Sat';
+      let h = 0, m = 0, wd = 'Mon';
       for (const p of fmt) {
         if (p.type === 'hour') h = parseInt(p.value, 10) % 24;
         if (p.type === 'minute') m = parseInt(p.value, 10);
         if (p.type === 'weekday') wd = p.value;
       }
-      const SufijoDia = (wd === 'Sun') ? 'DOM' : 'SAB';
-      const EtiquetaDia = (wd === 'Sun') ? 'Domingo' : (wd === 'Sat' ? 'Sábado' : 'Ref. Sábado');
-      return { minActual: h * 60 + m, sufijoDia: SufijoDia, etiquetaDia: EtiquetaDia };
+      let sufijoDia = 'HABIL';
+      let etiquetaDia = 'Día Hábil';
+      if (wd === 'Sat') {
+        sufijoDia = 'SAB';
+        etiquetaDia = 'Sábado';
+      } else if (wd === 'Sun') {
+        sufijoDia = 'DOM';
+        etiquetaDia = 'Domingo';
+      }
+      return { minActual: h * 60 + m, sufijoDia: sufijoDia, etiquetaDia: etiquetaDia };
+    }
+
+    function resolverClavePlanilla(linNom, sufijoDia) {
+      if (linNom === "50R") return "50R_HABIL";
+      const candidata = `${linNom}_${sufijoDia}`;
+      return PLANILLAS_INDALO[candidata] ? candidata : `${linNom}_HABIL`;
     }
 
     function togglePlanillas() {
@@ -1121,8 +1020,16 @@ HTML_COMPLETO = """
     function limpiarResaltadoPlanilla() {
       puntoKeyResaltado = null;
       document.getElementById('sched-legend-box').style.display = 'none';
-      document.getElementById('sched-title-text').innerText = '📅 Horarios Oficiales Fin de Semana (50A y 50B)';
+      document.getElementById('sched-title-text').innerText = '📅 Horarios Oficiales Indalo (50A, 50B y 50R)';
       mostrarPlanilla(clavePlanillaActual);
+    }
+
+    function obtenerColsPuntoSegunLinea(punto, linNom) {
+      if (!punto) return [];
+      if (linNom === "50A") return punto.cols50A || [];
+      if (linNom === "50B") return punto.cols50B || [];
+      if (linNom === "50R") return punto.cols50R || [];
+      return [];
     }
 
     function desplegarPlanillaConZona(puntoKey, lineaPreferida = null) {
@@ -1133,13 +1040,14 @@ HTML_COMPLETO = """
       const infoTiempo = obtenerMinutosActualesArgentina();
 
       let lin = lineaPreferida;
-      if (lin !== "50A" && lin !== "50B") {
-        lin = (punto.cols50A && punto.cols50A.length > 0) ? "50A" : "50B";
-      } else if (lin === "50B" && (!punto.cols50B || punto.cols50B.length === 0)) {
-        lin = "50A";
+      if (!lin || obtenerColsPuntoSegunLinea(punto, lin).length === 0) {
+        if ((punto.cols50A || []).length > 0) lin = "50A";
+        else if ((punto.cols50B || []).length > 0) lin = "50B";
+        else if ((punto.cols50R || []).length > 0) lin = "50R";
+        else lin = "50A";
       }
 
-      const clave = `${lin}_${infoTiempo.sufijoDia}`;
+      const clave = resolverClavePlanilla(lin, infoTiempo.sufijoDia);
       clavePlanillaActual = clave;
 
       const p = document.getElementById('sched-panel');
@@ -1148,7 +1056,7 @@ HTML_COMPLETO = """
       p.style.display = 'block';
       b.innerText = 'Ocultar Planilla ▴';
 
-      mostrarPlanilla(clave, null);
+      mostrarPlanilla(clave);
     }
 
     function irALaPlanillaAbajo() {
@@ -1156,20 +1064,17 @@ HTML_COMPLETO = """
       if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
-    function mostrarPlanilla(clave, btnEl = null) {
+    function mostrarPlanilla(clave) {
+      if (!PLANILLAS_INDALO[clave]) return;
       clavePlanillaActual = clave;
+
       document.querySelectorAll('.sched-tab').forEach(t => {
-        if (t.getAttribute('data-clave') === clave) {
-          t.classList.add('active');
-        } else {
-          t.classList.remove('active');
-        }
+        if (t.getAttribute('data-clave') === clave) t.classList.add('active');
+        else t.classList.remove('active');
       });
 
       const data = PLANILLAS_INDALO[clave];
-      if (!data) return;
-
-      const es50A = clave.startsWith("50A");
+      const linActual = clave.split('_')[0];
       const infoTiempo = obtenerMinutosActualesArgentina();
 
       const colsSeleccionadas = new Set();
@@ -1183,8 +1088,8 @@ HTML_COMPLETO = """
       const titleText = document.getElementById('sched-title-text');
 
       if (punto) {
-        const listaCols = es50A ? punto.cols50A : punto.cols50B;
-        if (listaCols && listaCols.length > 0) {
+        const listaCols = obtenerColsPuntoSegunLinea(punto, linActual);
+        if (listaCols.length > 0) {
           legendBox.style.display = 'flex';
           document.getElementById('legend-zone-name').innerText = `Zona: ${punto.nombreOficial}`;
           titleText.innerText = `📅 Planilla Oficial · Zona resaltada: ${punto.nombreOficial}`;
@@ -1226,11 +1131,11 @@ HTML_COMPLETO = """
           });
         } else {
           legendBox.style.display = 'none';
-          titleText.innerText = '📅 Horarios Oficiales Fin de Semana (50A y 50B)';
+          titleText.innerText = '📅 Horarios Oficiales Indalo (50A, 50B y 50R)';
         }
       } else {
         legendBox.style.display = 'none';
-        titleText.innerText = '📅 Horarios Oficiales Fin de Semana (50A y 50B)';
+        titleText.innerText = '📅 Horarios Oficiales Indalo (50A, 50B y 50R)';
       }
 
       let h = `<table class="sched-table"><thead><tr>`;
@@ -1269,29 +1174,28 @@ HTML_COMPLETO = """
         setTimeout(() => {
           const thEl = document.getElementById(`sched-th-${Math.max(0, primeraColResaltada)}`);
           const trEl = document.getElementById(`sched-tr-${Math.max(0, primeraFilaResaltada - 1)}`);
-          if (thEl) {
-            tableBox.scrollLeft = Math.max(0, thEl.offsetLeft - 60);
-          }
-          if (trEl) {
-            tableBox.scrollTop = Math.max(0, trEl.offsetTop - 38);
-          }
+          if (thEl) tableBox.scrollLeft = Math.max(0, thEl.offsetLeft - 60);
+          if (trEl) tableBox.scrollTop = Math.max(0, trEl.offsetTop - 38);
         }, 60);
       }
     }
 
     function calcularHorariosPuntoOficial(puntoKey, linNom) {
-      if (linNom !== "50A" && linNom !== "50B") return null;
+      if (linNom !== "50A" && linNom !== "50B" && linNom !== "50R") return null;
       const punto = PUNTOS_CONTROL_OFICIALES.find(p => p.key === puntoKey);
       if (!punto) return null;
 
-      const cols = (linNom === "50A") ? punto.cols50A : punto.cols50B;
-      if (!cols || cols.length === 0) return null;
+      const cols = obtenerColsPuntoSegunLinea(punto, linNom);
+      if (cols.length === 0) return null;
 
       const infoTiempo = obtenerMinutosActualesArgentina();
-      const planilla = PLANILLAS_INDALO[`${linNom}_${infoTiempo.sufijoDia}`];
+      const clavePlan = resolverClavePlanilla(linNom, infoTiempo.sufijoDia);
+      const planilla = PLANILLAS_INDALO[clavePlan];
       if (!planilla) return null;
 
+      const etiquetaPlan = (linNom === "50R") ? "Hábil / Sáb" : infoTiempo.etiquetaDia;
       const resultados = [];
+
       for (const cInfo of cols) {
         const proximos = [];
         for (const fila of planilla.filas) {
@@ -1314,7 +1218,7 @@ HTML_COMPLETO = """
           });
         }
       }
-      return { etiquetaDia: infoTiempo.etiquetaDia, bloques: resultados };
+      return { etiquetaDia: etiquetaPlan, bloques: resultados };
     }
 
     function armarHTMLHorarioProgramado(puntoKey, linNom) {
@@ -1336,7 +1240,6 @@ HTML_COMPLETO = """
       return html;
     }
 
-    // Semáforos reales del corredor Plottier - Ruta 22 - Av. Mosconi - Neuquén
     const SEMAFOROS = [
       [-38.9444, -68.2304],
       [-38.9444, -68.2257],
@@ -1432,13 +1335,14 @@ HTML_COMPLETO = """
       requestAnimationFrame(step);
     }
 
-    // Calcula únicamente cuál es la próxima Parada Oficial de la planilla y en cuántos minutos llega el colectivo
     function calcularProximaParada(bus) {
-      const mapaOrden = ORDEN_PARADAS_OFICIALES[bus.linea] || ORDEN_PARADAS_OFICIALES["DEFAULT"];
-      const clavesOrden = mapaOrden[bus.sentido_code] || ORDEN_PARADAS_OFICIALES["DEFAULT"]["HACIA_PLOTTIER"];
+      const mapaOrden = ORDEN_PARADAS_OFICIALES[bus.linea] || ORDEN_PARADAS_OFICIALES["DEFAULT"] || {};
+      const clavesOrden = mapaOrden[bus.sentido_code] || (ORDEN_PARADAS_OFICIALES["DEFAULT"] && ORDEN_PARADAS_OFICIALES["DEFAULT"]["HACIA_PLOTTIER"]) || [];
       const paradasRuta = clavesOrden
         .map(k => PUNTOS_CONTROL_OFICIALES.find(p => p.key === k))
         .filter(Boolean);
+
+      if (paradasRuta.length === 0) return "Avanzando en recorrido";
 
       const traza = (RUTAS_DENSAS[bus.linea] && RUTAS_DENSAS[bus.linea][bus.sentido_code]) || [];
 
@@ -1506,6 +1410,14 @@ HTML_COMPLETO = """
       const staticData = await r.json();
       RUTAS_GEO = staticData.trazas;
       PARADAS_LISTA = staticData.paradas_raw || [];
+
+      const horariosJson = staticData.horarios_oficiales || {};
+      PUNTOS_CONTROL_OFICIALES = horariosJson.puntos_control || [];
+      ORDEN_PARADAS_OFICIALES = horariosJson.orden_paradas || {};
+      PLANILLAS_INDALO = expandirPlanillasDesdeJSON(horariosJson.planillas || {});
+
+      const infoHoy = obtenerMinutosActualesArgentina();
+      clavePlanillaActual = resolverClavePlanilla("50A", infoHoy.sufijoDia);
 
       for (const [lin, sentidos] of Object.entries(RUTAS_GEO)) {
         RUTAS_DENSAS[lin] = {};
@@ -1578,7 +1490,7 @@ HTML_COMPLETO = """
 
         if (puntoOficial) {
           marker.on('popupopen', (e) => {
-            const linInicial = lineas["50A"] ? "50A" : (lineas["50B"] ? "50B" : null);
+            const linInicial = lineas["50A"] ? "50A" : (lineas["50B"] ? "50B" : (lineas["50R"] ? "50R" : null));
             desplegarPlanillaConZona(pKey, linInicial);
 
             const popupNode = e.popup.getElement();
@@ -1588,6 +1500,7 @@ HTML_COMPLETO = """
             let resumenProg = '';
             if (lineas["50A"]) resumenProg += armarHTMLHorarioProgramado(pKey, "50A");
             if (lineas["50B"]) resumenProg += armarHTMLHorarioProgramado(pKey, "50B");
+            if (lineas["50R"]) resumenProg += armarHTMLHorarioProgramado(pKey, "50R");
             if (resumenProg) {
               box.style.display = 'block';
               box.innerHTML = `<div style="font-size:10.5px; color:#555; margin-bottom:2px;">Toque una línea arriba para buscar GPS en vivo:</div>` + resumenProg;
@@ -1603,7 +1516,7 @@ HTML_COMPLETO = """
       const wrap = btnEl ? btnEl.closest('.stop-popup-wrap') : null;
       const box = wrap ? wrap.querySelector('.result-box') : document.querySelector('.leaflet-popup-content .result-box');
 
-      if (puntoKey && (linNom === "50A" || linNom === "50B")) {
+      if (puntoKey && (linNom === "50A" || linNom === "50B" || linNom === "50R")) {
         desplegarPlanillaConZona(puntoKey, linNom);
       }
 
@@ -1643,7 +1556,7 @@ HTML_COMPLETO = """
       let estadoHTML = '';
 
       if (bus.cabecera && bus.edad_senal >= LIMITE_DEBIL_SEG) {
-        estadoHTML = `<div style="color:#b7950b; font-weight:700; margin-top:4px;">⏸️️ En ${bus.cabecera}<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad aguardando horario de salida</span></div>`;
+        estadoHTML = `<div style="color:#b7950b; font-weight:700; margin-top:4px;">⏸ En ${bus.cabecera}<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad aguardando horario de salida</span></div>`;
       } else if (bus.edad_senal > LIMITE_AVERIA_SEG) {
         const minSin = Math.floor(bus.edad_senal / 60);
         estadoHTML = `<div style="color:#c0392b; font-weight:700; margin-top:4px;">🚨 Sin señal (${minSin} min)<br><span style="font-weight:normal; font-size:11px; color:#555;">Unidad detenida hasta recuperar señal</span></div>`;
