@@ -13,19 +13,284 @@ app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1. Cargar paradas, trazas y horarios oficiales desde los archivos JSON del repositorio
+# 1. Cargar paradas y trazas con rutas seguras
 with open(os.path.join(BASE_DIR, "paradas_optimizadas.json"), "r", encoding="utf-8") as f:
     PARADAS_RAW = json.load(f)
 
 with open(os.path.join(BASE_DIR, "urbano y r.json"), "r", encoding="utf-8") as f:
     raw_recorridos = json.load(f)["DBCuandoLlega"]["recorridos"]
 
-RUTA_HORARIOS = os.path.join(BASE_DIR, "horarios_oficiales.json")
-if os.path.isfile(RUTA_HORARIOS):
-    with open(RUTA_HORARIOS, "r", encoding="utf-8") as f:
-        HORARIOS_DATA = json.load(f)
-else:
-    HORARIOS_DATA = {"puntos_control": [], "orden_paradas": {}, "planillas": {}}
+def sumar_minutos_str(hhmm, mins):
+    partes = str(hhmm).split(":")
+    total = (int(partes[0]) * 60 + int(partes[1]) + int(mins)) % 1440
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+def construir_filas(especiales, salidas, deltas, fila_final=None):
+    filas = list(especiales or [])
+    acum = []
+    c = 0
+    for d in (deltas or []):
+        c += int(d)
+        acum.append(c)
+    for sal in (salidas or []):
+        filas.append([sumar_minutos_str(sal, m) for m in acum])
+    if fila_final:
+        filas.append(fila_final)
+    return filas
+
+# Respaldo completo en servidor por si el archivo JSON está en otra carpeta o incompleto
+HORARIOS_DEFAULT = {
+    "puntos_control": [
+        {
+            "key": "LOTEO_SOCIAL",
+            "nombreOficial": "Loteo Social (Cabecera)",
+            "lat": -38.930393, "lon": -68.252000,
+            "cols50A": [{"idx": 0, "label": "Salida hacia Nqn"}],
+            "cols50B": [{"idx": 0, "label": "Salida hacia Nqn"}],
+            "cols50R": []
+        },
+        {
+            "key": "SAN_MARTIN_TRABAJO",
+            "nombreOficial": "San Martín y Av. del Trabajo",
+            "lat": -38.944473, "lon": -68.225598,
+            "cols50A": [{"idx": 1, "label": "Hacia Neuquén"}],
+            "cols50B": [{"idx": 6, "label": "Regreso a Plottier"}],
+            "cols50R": []
+        },
+        {
+            "key": "CASA_CULTURA",
+            "nombreOficial": "Casa de la Cultura",
+            "lat": -38.950627, "lon": -68.225753,
+            "cols50A": [{"idx": 7, "label": "Regreso a Plottier"}],
+            "cols50B": [{"idx": 1, "label": "Hacia Neuquén"}],
+            "cols50R": []
+        },
+        {
+            "key": "AMANCAY_MUTICIAS",
+            "nombreOficial": "Amancay y Las Muticias",
+            "lat": -38.964520, "lon": -68.243109,
+            "cols50A": [{"idx": 6, "label": "Regreso a Plottier"}],
+            "cols50B": [{"idx": 2, "label": "Hacia Neuquén"}],
+            "cols50R": []
+        },
+        {
+            "key": "RUTA22_RIAVITZ",
+            "nombreOficial": "Ruta 22 y Riavitz",
+            "lat": -38.956680, "lon": -68.226224,
+            "cols50A": [{"idx": 5, "label": "Regreso a Plottier"}],
+            "cols50B": [],
+            "cols50R": []
+        },
+        {
+            "key": "RIO_COLORADO_IDA",
+            "nombreOficial": "Río Colorado y Ruta 22",
+            "lat": -38.956568, "lon": -68.167666,
+            "cols50A": [{"idx": 2, "label": "Hacia Neuquén"}, {"idx": 4, "label": "Hacia Plottier"}],
+            "cols50B": [{"idx": 3, "label": "Hacia Neuquén"}, {"idx": 5, "label": "Hacia Plottier"}],
+            "cols50R": [{"idx": 2, "label": "Hacia Neuquén"}, {"idx": 6, "label": "Hacia Plottier"}]
+        },
+        {
+            "key": "SAN_JUAN_BSAS",
+            "nombreOficial": "San Juan y Buenos Aires (Neuquén)",
+            "lat": -38.944522, "lon": -68.057589,
+            "cols50A": [{"idx": 3, "label": "Cabecera Neuquén"}],
+            "cols50B": [{"idx": 4, "label": "Cabecera Neuquén"}],
+            "cols50R": []
+        },
+        {
+            "key": "EL_MANGRULLO",
+            "nombreOficial": "El Mangrullo (Cabecera 50R)",
+            "lat": -38.983140, "lon": -68.350601,
+            "cols50A": [], "cols50B": [],
+            "cols50R": [{"idx": 0, "label": "Salida hacia Nqn"}]
+        },
+        {
+            "key": "RUTA22_ETOP",
+            "nombreOficial": "Ruta 22 Altura ETOP",
+            "lat": -38.955620, "lon": -68.218591,
+            "cols50A": [], "cols50B": [],
+            "cols50R": [{"idx": 1, "label": "Hacia Neuquén"}, {"idx": 7, "label": "Hacia El Mangrullo"}]
+        },
+        {
+            "key": "RUTA22_ETON",
+            "nombreOficial": "Ruta 22 Altura ETON",
+            "lat": -38.958036, "lon": -68.140249,
+            "cols50A": [], "cols50B": [],
+            "cols50R": [{"idx": 3, "label": "Hacia Neuquén"}, {"idx": 5, "label": "Hacia Plottier"}]
+        },
+        {
+            "key": "PARQUE_CENTRAL_NQN",
+            "nombreOficial": "Parque Central Neuquén (50R)",
+            "lat": -38.957187, "lon": -68.056286,
+            "cols50A": [], "cols50B": [],
+            "cols50R": [{"idx": 4, "label": "Cabecera Neuquén"}]
+        }
+    ],
+    "orden_paradas": {
+        "50A": {
+            "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
+            "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "RUTA22_RIAVITZ", "AMANCAY_MUTICIAS", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
+        },
+        "50B": {
+            "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "CASA_CULTURA", "AMANCAY_MUTICIAS", "RUTA22_RIAVITZ", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
+            "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
+        },
+        "50R": {
+            "HACIA_NEUQUEN": ["EL_MANGRULLO", "RUTA22_ETOP", "RIO_COLORADO_IDA", "RUTA22_ETON", "PARQUE_CENTRAL_NQN"],
+            "HACIA_PLOTTIER": ["PARQUE_CENTRAL_NQN", "RUTA22_ETON", "RIO_COLORADO_IDA", "RUTA22_ETOP", "EL_MANGRULLO"]
+        },
+        "DEFAULT": {
+            "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "CASA_CULTURA", "RUTA22_RIAVITZ", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
+            "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RIO_COLORADO_IDA", "RUTA22_RIAVITZ", "CASA_CULTURA", "LOTEO_SOCIAL"]
+        }
+    },
+    "planillas": {
+        "50A_HABIL": {
+            "nombre": "50A Hábil",
+            "columnas": ["Loteo Social", "San Martín y Trabajo", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
+            "filas": construir_filas(
+                [
+                    ["04:15","04:27","04:44","05:40","06:17","06:27","06:44","06:57","07:10"],
+                    ["04:48","05:00","05:17","06:13","06:50","07:00","07:17","07:30","07:43"],
+                    ["05:21","05:33","05:50","06:46","07:23","07:33","07:50","08:03","08:16"],
+                    ["05:54","06:06","06:23","07:19","07:56","08:06","08:23","08:36","08:49"],
+                    ["06:27","06:39","06:56","07:52","08:29","08:39","08:56","09:09","09:22"]
+                ],
+                ["07:20","07:53","08:26","08:59","09:32","10:06","10:39","11:12","11:45","12:18","12:52","13:25","13:58","14:31","15:04","15:38","16:11","16:44","17:17","17:50","18:24","18:57","19:30","20:03","20:36","21:10","21:43","22:16","22:49"],
+                [0, 12, 17, 37, 37, 10, 17, 13, 13],
+                ["23:22","23:34","23:51","00:28","-","-","-","-","-"]
+            )
+        },
+        "50A_SAB": {
+            "nombre": "50A Sábado",
+            "columnas": ["Loteo Social", "San Martín y Trabajo", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
+            "filas": construir_filas(
+                [
+                    ["04:25","04:37","04:54","05:40","06:17","06:29","06:46","06:58","07:10"],
+                    ["05:00","05:12","05:29","06:25","07:02","07:14","07:31","07:43","07:55"],
+                    ["05:45","05:57","06:14","07:10","07:47","07:59","08:16","08:28","08:40"],
+                    ["06:30","06:42","06:59","07:55","08:32","08:44","09:01","09:13","09:25"]
+                ],
+                ["07:22","08:07","08:52","09:37","10:10","10:55","11:40","12:25","12:58","13:43","14:28","15:13","15:46","16:31","17:16","18:01","18:34","19:19","20:04","20:49","21:22","22:07","22:52"],
+                [0, 12, 17, 37, 37, 12, 17, 12, 12],
+                ["23:37","23:49","00:06","00:43","-","-","-","-","-"]
+            )
+        },
+        "50A_DOM": {
+            "nombre": "50A Domingo",
+            "columnas": ["Loteo Social", "San Martín y Trabajo", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "Ruta 22 y Riavitz", "Amancay y Muticias", "Casa Cultura", "Loteo Social"],
+            "filas": construir_filas(
+                [
+                    ["05:30","05:42","05:59","07:00","07:30","07:45","08:00","08:15","08:27"],
+                    ["06:10","06:22","06:39","07:34","08:04","08:19","08:34","08:49","09:01"],
+                    ["06:50","07:02","07:19","08:14","08:44","08:59","09:14","09:29","09:41"]
+                ],
+                ["08:40","09:30","10:20","11:19","12:09","12:59","13:58","14:48","15:38","16:37","17:27","18:17","19:16","20:06","20:56","21:55","22:45"],
+                [0, 12, 17, 30, 30, 15, 15, 15, 12],
+                ["23:35","23:47","00:04","00:34","-","-","-","-","-"]
+            )
+        },
+        "50B_HABIL": {
+            "nombre": "50B Hábil",
+            "columnas": ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "San Martín y Trabajo", "Loteo Social"],
+            "filas": construir_filas(
+                [
+                    ["04:30","04:45","05:00","05:20","05:55","06:32","06:52","07:04"],
+                    ["05:03","05:18","05:33","05:53","06:28","07:05","07:25","07:37"],
+                    ["05:36","05:51","06:06","06:26","07:01","07:38","07:58","08:10"],
+                    ["06:09","06:24","06:39","06:59","07:34","08:11","08:31","08:43"],
+                    ["06:42","06:57","07:12","07:32","08:07","08:44","09:04","09:16"]
+                ],
+                ["07:14","07:47","08:20","08:53","09:26","10:00","10:33","11:06","11:39","12:12","12:46","13:19","13:52","14:25","14:58","15:32","16:05","16:38","17:11","17:44","18:18","18:51","19:24","19:57","20:30","21:04","21:37","22:10","22:43"],
+                [0, 15, 15, 20, 37, 37, 20, 12],
+                ["23:16","23:31","23:46","00:06","00:43","-","-","-"]
+            )
+        },
+        "50B_SAB": {
+            "nombre": "50B Sábado",
+            "columnas": ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "San Martín y Trabajo", "Loteo Social"],
+            "filas": construir_filas(
+                [
+                    ["04:30","04:45","05:00","05:20","05:23","06:00","06:20","06:32"],
+                    ["05:15","05:30","05:45","06:05","06:08","06:45","07:05","07:17"],
+                    ["06:00","06:15","06:30","06:50","06:53","07:30","07:50","08:02"],
+                    ["06:45","07:00","07:15","07:35","07:38","08:15","08:35","08:47"]
+                ],
+                ["06:44","07:29","08:14","08:59","09:32","10:17","11:02","11:47","12:20","13:05","13:50","14:35","15:08","15:53","16:38","17:23","17:56","18:41","19:26","20:11","20:44","21:29","22:14"],
+                [0, 15, 15, 20, 37, 37, 20, 12],
+                ["22:59","23:14","23:29","23:49","00:26","-","-","-"]
+            )
+        },
+        "50B_DOM": {
+            "nombre": "50B Domingo",
+            "columnas": ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "San Martín y Trabajo", "Loteo Social"],
+            "filas": construir_filas(
+                [
+                    ["05:40","05:53","06:06","06:26","06:34","07:09","07:29","07:39"],
+                    ["06:20","06:33","06:46","07:06","07:14","07:49","08:09","08:19"],
+                    ["07:00","07:13","07:26","07:46","07:54","08:29","08:49","08:59"]
+                ],
+                ["07:52","08:46","09:36","10:31","11:25","12:15","13:10","14:04","14:54","15:49","16:43","17:33","18:28","19:22","20:12","21:07","22:01"],
+                [0, 13, 13, 20, 35, 35, 20, 10],
+                ["22:51","23:04","23:17","23:37","00:12","-","-","-"]
+            )
+        },
+        "50R_HABIL": {
+            "nombre": "50R Hábil y Sábado",
+            "columnas": ["El Mangrullo", "Ruta 22 ETOP (Ida)", "Altura Aeropuerto (Ida)", "Altura ETON (Ida)", "Parque Central Nqn", "Altura ETON (Vta)", "Altura Aeropuerto (Vta)", "Ruta 22 ETOP (Vta)", "El Mangrullo"],
+            "filas": construir_filas(
+                [],
+                ["05:15","06:10","07:05","08:15","09:10","10:05","11:15","12:10","13:05","14:15","15:10","16:05","17:15","18:10","19:05","20:15","21:10","22:05","23:15"],
+                [0, 48, 12, 7, 18, 18, 7, 13, 47],
+                ["-","-","-","-","00:30","00:48","00:55","01:08","01:55"]
+            )
+        }
+    }
+}
+
+def cargar_horarios_repositorio():
+    """Busca horarios_oficiales.json en la raíz o en cualquier subcarpeta y garantiza que todas las filas estén completas."""
+    candidatos = [os.path.join(BASE_DIR, "horarios_oficiales.json")]
+    for root, _, files in os.walk(BASE_DIR):
+        for f in files:
+            if f.lower() == "horarios_oficiales.json":
+                p = os.path.join(root, f)
+                if p not in candidatos:
+                    candidatos.append(p)
+
+    for ruta in candidatos:
+        if os.path.isfile(ruta):
+            try:
+                with open(ruta, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                planillas_out = {}
+                for k, pad in HORARIOS_DEFAULT["planillas"].items():
+                    cfg = (raw.get("planillas") or {}).get(k, {})
+                    filas_cfg = cfg.get("filas")
+                    if not filas_cfg or len(filas_cfg) < 10:
+                        filas_cfg = construir_filas(
+                            cfg.get("especiales"),
+                            cfg.get("salidas") or cfg.get("salidasRegulares"),
+                            cfg.get("deltas"),
+                            cfg.get("fila_final") or cfg.get("filaFinal")
+                        )
+                    if not filas_cfg or len(filas_cfg) < 10:
+                        filas_cfg = pad["filas"]
+                    planillas_out[k] = {
+                        "nombre": cfg.get("nombre") or pad["nombre"],
+                        "columnas": cfg.get("columnas") or pad["columnas"],
+                        "filas": filas_cfg
+                    }
+                return {
+                    "puntos_control": raw.get("puntos_control") or HORARIOS_DEFAULT["puntos_control"],
+                    "orden_paradas": raw.get("orden_paradas") or HORARIOS_DEFAULT["orden_paradas"],
+                    "planillas": planillas_out
+                }
+            except Exception:
+                pass
+    return HORARIOS_DEFAULT
+
+HORARIOS_DATA = cargar_horarios_repositorio()
 
 MAPA_LINEAS = {
     "1013": "50A",
@@ -467,7 +732,7 @@ def api_static_data():
         "trazas": TRAZAS_GEO,
         "paradas": PARADAS_CLUSTERIZADAS,
         "paradas_raw": PARADAS_RAW,
-        "horarios_oficiales": HORARIOS_DATA
+        "horarios_oficiales": cargar_horarios_repositorio()
     })
 
 @app.route('/')
@@ -674,8 +939,9 @@ HTML_COMPLETO = """
     }
 
     .table-responsive {
-      max-height: 340px;
-      overflow: auto;
+      max-height: 400px;
+      overflow-y: auto;
+      overflow-x: auto;
       border-radius: 8px;
       border: 1px solid #313244;
       position: relative;
@@ -692,16 +958,16 @@ HTML_COMPLETO = """
     table.sched-table th {
       background: #1E1E2E;
       color: #89B4FA;
-      padding: 8px 8px;
+      padding: 8px 4px;
       font-weight: 800;
       position: sticky;
       top: 0;
       z-index: 10;
       border-bottom: 1px solid #313244;
-      white-space: nowrap;
+      font-size: 10.5px;
     }
     table.sched-table td {
-      padding: 6px 7px;
+      padding: 6px 4px;
       border-bottom: 1px solid #262738;
       white-space: nowrap;
     }
@@ -859,7 +1125,7 @@ HTML_COMPLETO = """
     <div id="map"></div>
   </div>
 
-  <!-- Desplegable de Planillas de Horarios Oficiales (cargado desde horarios_oficiales.json) -->
+  <!-- Desplegable de Planillas de Horarios Oficiales -->
   <section class="sched-card" id="sched-section">
     <div class="sched-header" onclick="togglePlanillas()">
       <div class="sched-header-title" id="sched-title-text">📅 Horarios Oficiales Indalo (50A, 50B y 50R)</div>
@@ -940,7 +1206,7 @@ HTML_COMPLETO = """
     const DIST_MAX_EN_RUTA_MTS = 35;
 
     function sumarMinutos(hhmm, mins) {
-      const partes = hhmm.split(':');
+      const partes = String(hhmm).split(':');
       let mTotal = parseInt(partes[0], 10) * 60 + parseInt(partes[1], 10) + mins;
       mTotal = (mTotal % 1440 + 1440) % 1440;
       const h = String(Math.floor(mTotal / 60)).padStart(2, '0');
@@ -948,27 +1214,33 @@ HTML_COMPLETO = """
       return `${h}:${m}`;
     }
 
-    function expandirPlanillasDesdeJSON(rawPlanillas) {
+    function normalizarPlanillasRecibidas(rawPlanillas) {
       const resultado = {};
       for (const [clave, cfg] of Object.entries(rawPlanillas || {})) {
-        const filas = [...(cfg.especiales || [])];
-        const acum = [];
-        let c = 0;
-        for (const d of (cfg.deltas || [])) {
-          c += d;
-          acum.push(c);
+        if (cfg.filas && Array.isArray(cfg.filas) && cfg.filas.length > 0) {
+          resultado[clave] = {
+            nombre: cfg.nombre,
+            columnas: cfg.columnas,
+            filas: cfg.filas
+          };
+        } else {
+          const filas = [...(cfg.especiales || [])];
+          const acum = [];
+          let c = 0;
+          for (const d of (cfg.deltas || [])) {
+            c += d;
+            acum.push(c);
+          }
+          for (const sal of (cfg.salidas || [])) {
+            filas.push(acum.map(m => sumarMinutos(sal, m)));
+          }
+          if (cfg.fila_final) filas.push(cfg.fila_final);
+          resultado[clave] = {
+            nombre: cfg.nombre,
+            columnas: cfg.columnas,
+            filas: filas
+          };
         }
-        for (const sal of (cfg.salidas || [])) {
-          filas.push(acum.map(m => sumarMinutos(sal, m)));
-        }
-        if (cfg.fila_final) {
-          filas.push(cfg.fila_final);
-        }
-        resultado[clave] = {
-          nombre: cfg.nombre,
-          columnas: cfg.columnas,
-          filas: filas
-        };
       }
       return resultado;
     }
@@ -1170,14 +1442,19 @@ HTML_COMPLETO = """
       const tableBox = document.getElementById('sched-table-box');
       tableBox.innerHTML = h;
 
-      if (primeraColResaltada !== -1 || primeraFilaResaltada !== -1) {
-        setTimeout(() => {
-          const thEl = document.getElementById(`sched-th-${Math.max(0, primeraColResaltada)}`);
+      // Desplazar verticalmente hasta la fila del próximo horario actual (y horizontalmente solo en celulares angostos)
+      setTimeout(() => {
+        if (primeraFilaResaltada !== -1) {
           const trEl = document.getElementById(`sched-tr-${Math.max(0, primeraFilaResaltada - 1)}`);
-          if (thEl) tableBox.scrollLeft = Math.max(0, thEl.offsetLeft - 60);
-          if (trEl) tableBox.scrollTop = Math.max(0, trEl.offsetTop - 38);
-        }, 60);
-      }
+          if (trEl) tableBox.scrollTop = Math.max(0, trEl.offsetTop - 42);
+        }
+        if (primeraColResaltada !== -1 && tableBox.scrollWidth > tableBox.clientWidth + 40) {
+          const thEl = document.getElementById(`sched-th-${Math.max(0, primeraColResaltada)}`);
+          if (thEl) tableBox.scrollLeft = Math.max(0, thEl.offsetLeft - 80);
+        } else {
+          tableBox.scrollLeft = 0;
+        }
+      }, 60);
     }
 
     function calcularHorariosPuntoOficial(puntoKey, linNom) {
@@ -1414,7 +1691,7 @@ HTML_COMPLETO = """
       const horariosJson = staticData.horarios_oficiales || {};
       PUNTOS_CONTROL_OFICIALES = horariosJson.puntos_control || [];
       ORDEN_PARADAS_OFICIALES = horariosJson.orden_paradas || {};
-      PLANILLAS_INDALO = expandirPlanillasDesdeJSON(horariosJson.planillas || {});
+      PLANILLAS_INDALO = normalizarPlanillasRecibidas(horariosJson.planillas || {});
 
       const infoHoy = obtenerMinutosActualesArgentina();
       clavePlanillaActual = resolverClavePlanilla("50A", infoHoy.sufijoDia);
