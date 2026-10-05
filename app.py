@@ -28,7 +28,6 @@ def cargar_modulo_paradas():
 
 MOD_PARADAS = cargar_modulo_paradas()
 
-# Cargar archivos base de paradas y recorridos
 with open(os.path.join(BASE_DIR, "paradas_optimizadas.json"), "r", encoding="utf-8") as f:
     PARADAS_RAW = json.load(f)
 
@@ -43,20 +42,40 @@ MAPA_LINEAS = {
     "1079": "52 CENTRO",
     "1080": "52 UNION"
 }
-MAPA_CODIGOS_LINEA = {v: k for k, v in MAPA_LINEAS.items()}
+
+# Límite físico real de colectivos por línea según las planillas oficiales de Indalo
+MAX_FLOTA_LINEA = {
+    "50A": 5,
+    "50B": 5,
+    "50R": 3,
+    "URBANO": 3,
+    "52 CENTRO": 3,
+    "52 UNION": 3
+}
+
+# 1 única parada testigo por sentido y línea para evitar clones por desfase de caché entre paradas
+PARADAS_TERMINALES = [
+    ("NV4120", "1013", "50A", "HACIA_NEUQUEN"),
+    ("NV8039", "1013", "50A", "HACIA_PLOTTIER"),
+    ("NV4120", "1014", "50B", "HACIA_NEUQUEN"),
+    ("NV1173", "1014", "50B", "HACIA_PLOTTIER"),
+    ("NV 4998", "1015", "50R", "HACIA_NEUQUEN"),
+    ("NV6001", "1015", "50R", "HACIA_PLOTTIER"),
+    ("NV8064", "1109", "URBANO", None),
+    ("51 00001", "1109", "URBANO", None),
+    ("5200001", "1079", "52 CENTRO", None),
+    ("5200047", "1079", "52 CENTRO", None),
+    ("5200001", "1080", "52 UNION", None),
+    ("5200047", "1080", "52 UNION", None)
+]
 
 TRAZAS_GEO = {lin: {} for lin in MAPA_LINEAS.values()}
 TRAZAS_DENSAS = {lin: {} for lin in MAPA_LINEAS.values()}
-PARADAS_POR_SENTIDO = {lin: {"HACIA_NEUQUEN": [], "HACIA_PLOTTIER": []} for lin in MAPA_LINEAS.values()}
 
 def distancia_km(lat1, lon1, lat2, lon2):
     return math.sqrt(((lat1 - lat2) * 111.0) ** 2 + ((lon1 - lon2) * 111.0 * 0.777) ** 2)
 
 def densificar_traza_con_distancia(puntos, paso_km=0.020):
-    """
-    Subdivide la polilínea cada 20 metros y guarda en cada punto [lat, lon, km_acumulados]
-    para medir la distancia real exacta siguiendo las calles del recorrido.
-    """
     if not puntos or len(puntos) < 2:
         return []
     acum_km = 0.0
@@ -101,32 +120,6 @@ for rec in raw_recorridos:
     TRAZAS_GEO[lin][sentido] = pts
     TRAZAS_DENSAS[lin][sentido] = densificar_traza_con_distancia(pts)
 
-# Indexar todas las paradas ordenadas por kilómetro sobre cada traza para el Rescate Dirigido
-for p in PARADAS_RAW:
-    id_p = str(p[0]).strip()
-    plat, plon = float(p[1]), float(p[2])
-    lineas_p = p[4] or {}
-    for lin_nom, lin_cod in lineas_p.items():
-        if lin_nom not in TRAZAS_DENSAS:
-            continue
-        for sent_code, traza in TRAZAS_DENSAS[lin_nom].items():
-            if not traza:
-                continue
-            idx_pt, d_traza = indice_mas_cercano(plat, plon, traza)
-            if d_traza <= 0.075:
-                PARADAS_POR_SENTIDO[lin_nom][sent_code].append({
-                    "id": id_p,
-                    "cod": str(lin_cod),
-                    "linea": lin_nom,
-                    "lat": plat,
-                    "lon": plon,
-                    "km": traza[idx_pt][2]
-                })
-
-for lin_nom in PARADAS_POR_SENTIDO:
-    for sent_code in PARADAS_POR_SENTIDO[lin_nom]:
-        PARADAS_POR_SENTIDO[lin_nom][sent_code].sort(key=lambda x: x["km"])
-
 MAPA_COORDS_PARADAS = {str(p[0]).strip(): (float(p[1]), float(p[2])) for p in PARADAS_RAW}
 PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 
@@ -154,31 +147,6 @@ def extraer_minutos(tiempo_str):
     m = re.search(r'(\d+)', str(tiempo_str or ""))
     return int(m.group(1)) if m else 999
 
-def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=42):
-    """
-    Filtra los arribos devueltos por una parada:
-    1) Descarta predicciones lejanas (> 42 min) que corresponden a la vuelta siguiente.
-    2) Deduplica unidades que estén a menos de 110 metros entre sí dentro de la misma respuesta.
-    """
-    validos = []
-    for a in arribos:
-        min_eta = extraer_minutos(a.get("tiempo") or a.get("tiempo_arribo"))
-        if min_eta <= max_minutos:
-            validos.append({**a, "_min_eta": min_eta})
-
-    ordenados = sorted(validos, key=lambda x: x["_min_eta"])
-    unicos = []
-    for a in ordenados:
-        try:
-            lat, lon = float(a.get("lat") or 0), float(a.get("lon") or 0)
-        except (ValueError, TypeError):
-            continue
-        if not lat or not lon:
-            continue
-        if not any(distancia_km(lat, lon, float(u["lat"]), float(u["lon"])) < 0.11 for u in unicos):
-            unicos.append({**a, "linea": linea})
-    return unicos
-
 def deducir_sentido_bandera(ramal_raw):
     txt = str(ramal_raw or "").upper()
     if "VUELTA" in txt or "VTA" in txt: return "Hacia Plottier", "HACIA_PLOTTIER"
@@ -194,81 +162,46 @@ def deducir_sentido_geometria(linea, lat, lon):
         return "Hacia Plottier", "HACIA_PLOTTIER", d_nqn, d_plo
     return "Hacia Neuquén", "HACIA_NEUQUEN", d_nqn, d_plo
 
-def estimar_posicion_proyectada(bus, ahora):
+def filtrar_arribos_parada_terminal(arribos, linea, sentido_esperado=None, max_minutos=42):
     """
-    Calcula dónde debería estar hoy un colectivo que perdió señal hace 'dt' segundos
-    avanzando sobre su traza. Permite emparejarlo con exactitud cuando reaparece más adelante.
+    Filtra los arribos de una parada terminal:
+    1) Conserva solo viajes actuales (<= 42 min).
+    2) Si la parada es exclusiva de un sentido (ej. NV4120 = HACIA_NEUQUEN), ignora viajes del sentido opuesto.
+    3) Elimina duplicados dentro de un radio de 300 metros.
     """
-    dt = max(0.0, min(ahora - bus["last_gps_at"], 180.0))
-    if dt < 10.0 or bus.get("cabecera"):
-        return bus["lat"], bus["lon"]
+    validos = []
+    for a in arribos:
+        min_eta = extraer_minutos(a.get("tiempo") or a.get("tiempo_arribo"))
+        if min_eta > max_minutos:
+            continue
+        _, code_b = deducir_sentido_bandera(a.get("ramal"))
+        if sentido_esperado and code_b and code_b != sentido_esperado:
+            continue
+        validos.append({**a, "_min_eta": min_eta})
 
-    traza = TRAZAS_DENSAS.get(bus["linea"], {}).get(bus["sentido_code"], [])
-    if len(traza) < 2:
-        return bus["lat"], bus["lon"]
+    ordenados = sorted(validos, key=lambda x: x["_min_eta"])
+    unicos = []
+    for a in ordenados:
+        try:
+            lat, lon = float(a.get("lat") or 0), float(a.get("lon") or 0)
+        except (ValueError, TypeError):
+            continue
+        if not lat or not lon:
+            continue
+        if not any(distancia_km(lat, lon, float(u["lat"]), float(u["lon"])) < 0.30 for u in unicos):
+            unicos.append({**a, "linea": linea})
+    return unicos
 
-    idx_b, dist_b = indice_mas_cercano(bus["lat"], bus["lon"], traza)
-    if dist_b > 0.25:
-        return bus["lat"], bus["lon"]
-
-    # Estimar avance conservador a ~23 km/h durante el tiempo sin señal
-    avance_km = (dt / 3600.0) * 23.0
-    km_objetivo = traza[idx_b][2] + avance_km
-    for i in range(idx_b, len(traza)):
-        if traza[i][2] >= km_objetivo:
-            return traza[i][0], traza[i][1]
-    return traza[-1][0], traza[-1][1]
-
-def buscar_parada_rescate(bus, ahora):
+def fusionar_y_limitar_flota():
     """
-    Cuando un colectivo pierde señal, selecciona quirúrgicamente una parada que esté
-    entre 0.35 km y 4.2 km ADELANTE de su ubicación estimada sobre su misma ruta y sentido.
-    Si el primer intento no lo encontró, rota entre las siguientes paradas hacia adelante.
-    """
-    linea = bus["linea"]
-    sentido_code = bus["sentido_code"]
-    cod_linea = MAPA_CODIGOS_LINEA.get(linea)
-    if not cod_linea:
-        return None
-
-    traza = TRAZAS_DENSAS.get(linea, {}).get(sentido_code, [])
-    paradas_sentido = PARADAS_POR_SENTIDO.get(linea, {}).get(sentido_code, [])
-    intento = int(bus.get("intentos_rescate", 0))
-
-    if len(traza) >= 2 and paradas_sentido:
-        lat_proy, lon_proy = estimar_posicion_proyectada(bus, ahora)
-        idx_proy, _ = indice_mas_cercano(lat_proy, lon_proy, traza)
-        km_actual = traza[idx_proy][2]
-
-        # Buscar paradas que estén entre 350m y 4.2km adelante del colectivo
-        candidatas = [
-            p for p in paradas_sentido
-            if (km_actual + 0.35) <= p["km"] <= (km_actual + 4.2)
-            and (p["id"].upper().startswith("NV") or p["id"].upper().startswith("N") or p["id"].startswith("5"))
-        ]
-        if not candidatas:
-            candidatas = [p for p in paradas_sentido if p["km"] > km_actual + 0.15]
-
-        if candidatas:
-            elegida = candidatas[min(intento * 2, len(candidatas) - 1)]
-            return {"id": elegida["id"], "cod": elegida["cod"], "linea": linea}
-
-    # Respaldo si no hay paradas indexadas adelante: usar la cabecera de destino de ese sentido
-    for p_id, p_cod, p_lin in MOD_PARADAS.PARADAS_RADAR:
-        if p_lin == linea:
-            return {"id": p_id, "cod": p_cod, "linea": p_lin}
-    return None
-
-def fusionar_buses_solapados():
-    """
-    CAPA 3 ANTI-SOLAPAMIENTO:
-    Revisa todas las unidades activas y fusiona cualquier par de colectivos de la misma línea
-    que hayan quedado solapados (< 120m en cualquier caso, o < 240m en el mismo sentido cuando
-    uno tenía señal vieja y fue re-detectado más adelante).
-    Conserva siempre el ID más antiguo para que el marcador del mapa no parpadee.
+    1) Fusiona unidades de la misma línea y sentido que estén a menos de 850 metros (o 220m en cualquier sentido).
+    2) Aplica el límite físico real de unidades por línea (MAX_FLOTA_LINEA) eliminando los fantasmas más antiguos.
     """
     buses_dict = ESTADO_GLOBAL["buses"]
-    ids = sorted(buses_dict.keys(), key=lambda x: int(x.split("_")[1]) if "_" in x and x.split("_")[1].isdigit() else 9999)
+    ids = sorted(
+        buses_dict.keys(),
+        key=lambda x: int(x.split("_")[1]) if "_" in x and x.split("_")[1].isdigit() else 9999
+    )
     eliminar = set()
 
     for i in range(len(ids)):
@@ -288,10 +221,9 @@ def fusionar_buses_solapados():
 
             dist_real = distancia_km(a["lat"], a["lon"], b["lat"], b["lon"])
             mismo_sentido = (a["sentido_code"] == b["sentido_code"])
-            diferencia_tiempo = abs(a["last_gps_at"] - b["last_gps_at"])
 
-            # Si están prácticamente encima (< 120m) o son el mismo coche tras recuperar señal (< 240m)
-            if dist_real < 0.12 or (mismo_sentido and dist_real < 0.24 and diferencia_tiempo > 12):
+            # Dos colectivos reales de la misma línea y mismo sentido nunca van a menos de 850m
+            if dist_real < 0.22 or (mismo_sentido and dist_real < 0.85):
                 if b["last_gps_at"] >= a["last_gps_at"]:
                     a.update({
                         "lat": b["lat"],
@@ -303,21 +235,32 @@ def fusionar_buses_solapados():
                         "ramal": b["ramal"],
                         "vel_kmh": b.get("vel_kmh", a.get("vel_kmh", 28.0)),
                         "last_gps_at": b["last_gps_at"],
-                        "updated_at": b["updated_at"],
-                        "intentos_rescate": 0
+                        "updated_at": b["updated_at"]
                     })
                 eliminar.add(id_b)
 
     for k in eliminar:
         buses_dict.pop(k, None)
 
+    # Aplicar tope estricto de flota real por línea (descarta fantasmas viejos)
+    por_linea = {}
+    for b_id, b in buses_dict.items():
+        por_linea.setdefault(b["linea"], []).append(b_id)
+
+    for lin, lista_ids in por_linea.items():
+        max_unidades = MAX_FLOTA_LINEA.get(lin, 4)
+        if len(lista_ids) > max_unidades:
+            # Conservar únicamente las unidades con señal GPS más reciente
+            lista_ids.sort(key=lambda bid: buses_dict[bid]["last_gps_at"], reverse=True)
+            for bid_sobrante in lista_ids[max_unidades:]:
+                buses_dict.pop(bid_sobrante, None)
+
 def procesar_nuevas_posiciones(detecciones):
     if not detecciones:
         return
     ahora = time.time()
+    buses_reclamados = set()
 
-    # CAPA 1: Deduplicar detecciones entrantes del mismo lote que estén a menos de 110m
-    lote_limpio = []
     for d in detecciones:
         try:
             lat, lon = float(d.get("lat") or 0), float(d.get("lon") or 0)
@@ -326,37 +269,24 @@ def procesar_nuevas_posiciones(detecciones):
         linea = normalizar_linea(d.get("linea"))
         if not lat or not lon or not linea:
             continue
-        if not any(x["linea"] == linea and distancia_km(lat, lon, x["lat"], x["lon"]) < 0.11 for x in lote_limpio):
-            lote_limpio.append({**d, "lat": lat, "lon": lon, "linea": linea})
 
-    # Llevar registro de qué buses existentes ya fueron reclamados en este lote (Asignación 1 a 1)
-    buses_reclamados = set()
-
-    for d in lote_limpio:
-        lat, lon, linea = d["lat"], d["lon"], d["linea"]
         min_eta = int(d.get("_min_eta") or extraer_minutos(d.get("tiempo") or d.get("tiempo_arribo")))
         sentido_bandera, code_bandera = deducir_sentido_bandera(d.get("ramal"))
         sentido_geo, code_geo, d_nqn, d_plo = deducir_sentido_geometria(linea, lat, lon)
 
+        # Buscar el colectivo existente más cercano de esa línea (radio amplio de 2.4 km en el mismo sentido)
         bus_match_id = None
         menor_score = 999.0
 
-        # CAPA 2: Emparejamiento 1 a 1 comparando contra posición real y posición proyectada
         for b_id, b in ESTADO_GLOBAL["buses"].items():
             if b["linea"] != linea or b_id in buses_reclamados:
                 continue
+            dist = distancia_km(b["lat"], b["lon"], lat, lon)
+            mismo_sentido = (not code_bandera) or (b["sentido_code"] == code_bandera)
+            radio_max = 2.4 if mismo_sentido else 0.9
 
-            dist_directa = distancia_km(b["lat"], b["lon"], lat, lon)
-            lat_proy, lon_proy = estimar_posicion_proyectada(b, ahora)
-            dist_proy = distancia_km(lat_proy, lon_proy, lat, lon)
-            dist_efectiva = min(dist_directa, dist_proy)
-
-            edad_bus = ahora - b["last_gps_at"]
-            radio_max = 2.2 if edad_bus > 25 else 1.4
-
-            if dist_efectiva < radio_max:
-                penalizacion = 0.25 if (code_bandera and code_bandera != b["sentido_code"]) else 0.0
-                score = dist_efectiva + penalizacion
+            if dist <= radio_max:
+                score = dist + (0.0 if mismo_sentido else 0.4)
                 if score < menor_score:
                     menor_score = score
                     bus_match_id = b_id
@@ -368,27 +298,17 @@ def procesar_nuevas_posiciones(detecciones):
             delta_lon = lon - bus["lon"]
             dt = max(ahora - bus["last_gps_at"], 1.0)
 
-            if abs(d_nqn - d_plo) > 0.08:
+            if sentido_bandera:
+                sentido, sentido_code = sentido_bandera, code_bandera
+            elif abs(d_nqn - d_plo) > 0.08:
                 sentido, sentido_code = sentido_geo, code_geo
             elif abs(delta_lon) > 0.00035:
                 sentido = "Hacia Plottier" if delta_lon < 0 else "Hacia Neuquén"
                 sentido_code = "HACIA_PLOTTIER" if delta_lon < 0 else "HACIA_NEUQUEN"
-            elif sentido_bandera:
-                eta_previa = bus.get("min_eta_radar", 999)
-                edad_eta_previa = ahora - bus.get("eta_radar_at", 0)
-                if code_bandera != bus["sentido_code"] and edad_eta_previa < 45 and min_eta > eta_previa + 4:
-                    sentido, sentido_code = bus["sentido"], bus["sentido_code"]
-                else:
-                    sentido, sentido_code = sentido_bandera, code_bandera
-                    bus["min_eta_radar"] = min_eta
-                    bus["eta_radar_at"] = ahora
             else:
                 sentido, sentido_code = bus["sentido"], bus["sentido_code"]
 
-            if min_eta <= bus.get("min_eta_radar", 999) or (ahora - bus.get("eta_radar_at", 0)) >= 45:
-                bus["min_eta_radar"] = min_eta
-                bus["eta_radar_at"] = ahora
-
+            # Solo renovar last_gps_at si el colectivo realmente movió sus coordenadas (> 10 metros)
             if dist_avance > 0.010:
                 vel_kmh = round(max(18.0, min((dist_avance / dt) * 3600.0, 45.0)), 1)
                 bus.update({
@@ -397,12 +317,8 @@ def procesar_nuevas_posiciones(detecciones):
                     "lat": lat,
                     "lon": lon,
                     "vel_kmh": vel_kmh,
-                    "last_gps_at": ahora,
-                    "intentos_rescate": 0
+                    "last_gps_at": ahora
                 })
-            elif ahora - bus["last_gps_at"] < 150:
-                bus["last_gps_at"] = max(bus["last_gps_at"], ahora - 12)
-                bus["intentos_rescate"] = 0
 
             ramal_actual = str(d.get("ramal") or bus.get("ramal") or f"Línea {linea}")
             if sentido_code == "HACIA_PLOTTIER" and "IDA" in ramal_actual.upper():
@@ -414,16 +330,18 @@ def procesar_nuevas_posiciones(detecciones):
                 "ramal": ramal_actual,
                 "sentido": sentido,
                 "sentido_code": sentido_code,
+                "min_eta_radar": min_eta,
                 "cabecera": detectar_cabecera(lat, lon),
                 "updated_at": ahora
             })
         else:
             nuevo_id = f"{linea}_{ESTADO_GLOBAL['contador_ids']}"
             ESTADO_GLOBAL["contador_ids"] += 1
-            if abs(d_nqn - d_plo) > 0.06:
-                sentido, sentido_code = sentido_geo, code_geo
-            elif sentido_bandera:
+
+            if sentido_bandera:
                 sentido, sentido_code = sentido_bandera, code_bandera
+            elif abs(d_nqn - d_plo) > 0.06:
+                sentido, sentido_code = sentido_geo, code_geo
             else:
                 sentido, sentido_code = sentido_geo or "Hacia Plottier", code_geo or "HACIA_PLOTTIER"
 
@@ -437,83 +355,45 @@ def procesar_nuevas_posiciones(detecciones):
                 "id": nuevo_id, "linea": linea, "ramal": ramal_inicial,
                 "sentido": sentido, "sentido_code": sentido_code, "lat": lat, "lon": lon,
                 "prev_lat": lat, "prev_lon": lon, "vel_kmh": 28.0,
-                "min_eta_radar": min_eta, "eta_radar_at": ahora,
-                "intentos_rescate": 0, "ultimo_rescate_at": 0.0,
+                "min_eta_radar": min_eta,
                 "cabecera": detectar_cabecera(lat, lon), "last_gps_at": ahora, "updated_at": ahora
             }
             buses_reclamados.add(nuevo_id)
 
-    # Limpiar unidades inactivas (> 8 min) y fusionar cualquier solapamiento
-    ESTADO_GLOBAL["buses"] = {k: v for k, v in ESTADO_GLOBAL["buses"].items() if ahora - v["last_gps_at"] < 480}
-    fusionar_buses_solapados()
+    # Limpiar unidades que llevan más de 6 minutos (360s) sin mover su GPS y fusionar solapados
+    ESTADO_GLOBAL["buses"] = {
+        k: v for k, v in ESTADO_GLOBAL["buses"].items()
+        if ahora - v["last_gps_at"] < 360
+    }
+    fusionar_y_limitar_flota()
 
-def rescatar_unidades_sin_senal():
+def ejecutar_paso_radar(cantidad_paradas=4):
     """
-    Si algún colectivo lleva más de 20s sin actualizar señal (o falta una línea entera),
-    envía una única orden en lote a /rescate del Worker para que consulte a Indalo
-    específicamente por esas unidades faltantes.
+    Rota secuencialmente por las 12 paradas terminales (4 por ciclo con pausa de 0.35s).
+    Así escanea las 6 líneas (50A, 50B, 50R, Urbano, 52 Centro y 52 Unión) sin causar HTTP 429.
     """
-    ahora = time.time()
-    pedidos_rescate = []
-    vistas = set()
-
-    # 1. Buscar colectivos activos que estén perdiendo señal (> 20s sin GPS nuevo)
-    buses_sin_senal = [
-        b for b in ESTADO_GLOBAL["buses"].values()
-        if (ahora - b["last_gps_at"]) >= 20 and not (b.get("cabecera") and (ahora - b["last_gps_at"]) > 60)
-    ]
-    buses_sin_senal.sort(key=lambda x: ahora - x["last_gps_at"], reverse=True)
-
-    for bus in buses_sin_senal[:4]:
-        p_rescate = buscar_parada_rescate(bus, ahora)
-        bus["intentos_rescate"] = int(bus.get("intentos_rescate", 0)) + 1
-        if p_rescate:
-            item_str = f"{p_rescate['id']}:{p_rescate['cod']}:{p_rescate['linea']}"
-            if item_str not in vistas:
-                vistas.add(item_str)
-                pedidos_rescate.append(item_str)
-
-    # 2. Si alguna línea principal quedó vacía en el mapa, incluir su parada troncal en el rescate
-    lineas_activas = {b["linea"] for b in ESTADO_GLOBAL["buses"].values() if (ahora - b["last_gps_at"]) <= 240}
-    for p_id, p_cod, p_lin in MOD_PARADAS.PARADAS_RADAR:
-        if p_lin not in lineas_activas and len(pedidos_rescate) < 5:
-            item_str = f"{p_id}:{p_cod}:{p_lin}"
-            if item_str not in vistas:
-                vistas.add(item_str)
-                pedidos_rescate.append(item_str)
-
-    if not pedidos_rescate:
-        return
-
-    try:
-        rp = requests.get(
-            f"{URL_WORKER}rescate",
-            params={"items": ",".join(pedidos_rescate)},
-            timeout=8
-        )
-        if rp.status_code == 200:
-            buses_recuperados = rp.json().get("buses", [])
-            if buses_recuperados:
-                procesar_nuevas_posiciones(buses_recuperados)
-    except Exception:
-        pass
-
-def ejecutar_paso_radar(cantidad_paradas=5):
     if not RADAR_LOCK.acquire(blocking=False):
         return
     try:
         ESTADO_GLOBAL["ultimo_escaneo"] = time.time()
+        idx = ESTADO_GLOBAL["idx_radar"]
+        lote = [PARADAS_TERMINALES[(idx + i) % len(PARADAS_TERMINALES)] for i in range(cantidad_paradas)]
+        ESTADO_GLOBAL["idx_radar"] = (idx + cantidad_paradas) % len(PARADAS_TERMINALES)
 
-        # 1. Pedir al Worker el barrido general de la flota (responde en ~1.5s con las paradas nuevas)
-        try:
-            r = requests.get(URL_WORKER, timeout=9)
-            if r.status_code == 200:
-                procesar_nuevas_posiciones(r.json().get("buses", []))
-        except Exception:
-            pass
-
-        # 2. Si algún colectivo sigue sin reportar señal, enviar señal dirigida a /rescate del Worker
-        rescatar_unidades_sin_senal()
+        for p_id, p_cod, p_lin, sent_esp in lote:
+            try:
+                rp = requests.get(
+                    f"{URL_WORKER}parada",
+                    params={"id": p_id, "cod": p_cod, "linea": p_lin},
+                    timeout=7
+                )
+                if rp.status_code == 200:
+                    arribos_raw = rp.json().get("arribos", [])
+                    arribos_limpios = filtrar_arribos_parada_terminal(arribos_raw, p_lin, sent_esp, max_minutos=42)
+                    procesar_nuevas_posiciones(arribos_limpios)
+            except Exception:
+                pass
+            time.sleep(0.35)
 
         try:
             ESTADO_GLOBAL["timestamp"] = datetime.now(zoneinfo.ZoneInfo("America/Argentina/Buenos_Aires")).strftime("%H:%M:%S")
@@ -524,8 +404,8 @@ def ejecutar_paso_radar(cantidad_paradas=5):
 
 def recolector_fondo():
     while True:
-        ejecutar_paso_radar(5)
-        time.sleep(7)
+        ejecutar_paso_radar(4)
+        time.sleep(6)
 
 Thread(target=recolector_fondo, daemon=True).start()
 
@@ -534,7 +414,7 @@ Thread(target=recolector_fondo, daemon=True).start()
 @app.route('/ping')
 def ruta_cron_ok():
     if time.time() - ESTADO_GLOBAL.get("ultimo_escaneo", 0) > 4:
-        Thread(target=ejecutar_paso_radar, args=(6,), daemon=True).start()
+        Thread(target=ejecutar_paso_radar, args=(4,), daemon=True).start()
     return Response("<!DOCTYPE html><html><body style='background:#fff;color:#000;'>ok</body></html>", status=200, mimetype='text/html')
 
 @app.route('/logo.png')
@@ -603,10 +483,8 @@ def api_parada():
         if len(traza) < 2:
             continue
 
-        # Usar la posición proyectada si el colectivo lleva unos segundos sin señal
-        lat_actual, lon_actual = estimar_posicion_proyectada(bus, ahora)
-        idx_bus, dist_bus_traza = indice_mas_cercano(lat_actual, lon_actual, traza)
-        limite_desvio_bus = 0.65 if lon_actual > -68.088 else 0.25
+        idx_bus, dist_bus_traza = indice_mas_cercano(bus["lat"], bus["lon"], traza)
+        limite_desvio_bus = 0.65 if bus["lon"] > -68.088 else 0.25
         if dist_bus_traza > limite_desvio_bus:
             continue
 
@@ -618,13 +496,13 @@ def api_parada():
         if dist_recorrido_km > 22.0:
             continue
 
-        tiempo_txt, min_orden = formatear_rango_arribo(dist_recorrido_km, lon_actual)
+        tiempo_txt, min_orden = formatear_rango_arribo(dist_recorrido_km, bus["lon"])
         arribos_calculados.append({
             "ramal": bus["ramal"],
             "sentido": bus["sentido"],
             "tiempo": tiempo_txt,
-            "lat": lat_actual,
-            "lon": lon_actual,
+            "lat": bus["lat"],
+            "lon": bus["lon"],
             "_min": min_orden
         })
 
