@@ -539,6 +539,14 @@ def api_parada():
 @app.route('/api/radar')
 def api_radar():
     ahora = time.time()
+    # Si no hay colectivos en memoria (ej. recién despierta Render), escanea en el acto
+    if not ESTADO_GLOBAL["buses"] and (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 2:
+        ejecutar_paso_radar(8)
+    # Si el hilo de fondo demoró más de 7 segundos, lanza un barrido asíncrono
+    elif (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 7:
+        Thread(target=ejecutar_paso_radar, args=(6,), daemon=True).start()
+
+    ahora = time.time()
     lista = [
         {**b, "edad_senal": int(max(0, ahora - b["last_gps_at"]))}
         for b in ESTADO_GLOBAL["buses"].values()
