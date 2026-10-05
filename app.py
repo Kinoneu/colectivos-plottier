@@ -44,6 +44,27 @@ MAPA_LINEAS = {
     "1080": "52 UNION"
 }
 TRAZAS_GEO = {lin: {} for lin in MAPA_LINEAS.values()}
+TRAZAS_DENSAS = {lin: {} for lin in MAPA_LINEAS.values()}
+
+def distancia_km(lat1, lon1, lat2, lon2):
+    return math.sqrt(((lat1 - lat2) * 111.0) ** 2 + ((lon1 - lon2) * 111.0 * 0.777) ** 2)
+
+def densificar_traza(puntos, paso_km=0.025):
+    """Subdivide la polilínea cada 25 metros para calcular distancias exactas en memoria."""
+    if not puntos or len(puntos) < 2:
+        return puntos or []
+    res = [puntos[0]]
+    for i in range(len(puntos) - 1):
+        p1, p2 = puntos[i], puntos[i + 1]
+        d = distancia_km(p1[0], p1[1], p2[0], p2[1])
+        pasos = max(1, int(math.ceil(d / paso_km)))
+        for s in range(1, pasos + 1):
+            t = s / pasos
+            res.append([
+                round(p1[0] + (p2[0] - p1[0]) * t, 6),
+                round(p1[1] + (p2[1] - p1[1]) * t, 6)
+            ])
+    return res
 
 for rec in raw_recorridos:
     cod = str(rec.get("codigoLinea"))
@@ -51,22 +72,23 @@ for rec in raw_recorridos:
     if not lin:
         continue
     sentido = "HACIA_NEUQUEN" if "IDA" in rec.get("bandera", "").upper() else "HACIA_PLOTTIER"
-    TRAZAS_GEO[lin][sentido] = [
+    pts = [
         [round(float(p["latitud"]), 6), round(float(p["longitud"]), 6)]
         for p in rec.get("puntos", [])
         if p.get("latitud") and p.get("longitud")
     ]
+    TRAZAS_GEO[lin][sentido] = pts
+    TRAZAS_DENSAS[lin][sentido] = densificar_traza(pts)
+
+# Diccionario rápido de coordenadas por ID de parada para cálculos en memoria
+MAPA_COORDS_PARADAS = {str(p[0]).strip(): (float(p[1]), float(p[2])) for p in PARADAS_RAW}
 
 # Procesar y agrupar paradas usando el módulo externo
 PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 
 URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
 ESTADO_GLOBAL = {"timestamp": "--:--:--", "buses": {}, "contador_ids": 1, "idx_radar": 0, "ultimo_escaneo": 0.0}
-CACHE_PARADAS = {}
 RADAR_LOCK = Lock()
-
-def distancia_km(lat1, lon1, lat2, lon2):
-    return math.sqrt(((lat1 - lat2) * 111.0) ** 2 + ((lon1 - lon2) * 111.0 * 0.777) ** 2)
 
 def detectar_cabecera(lat, lon):
     for c_lat, c_lon, c_nom in MOD_PARADAS.CABECERAS_GEO:
@@ -109,13 +131,22 @@ def deducir_sentido_bandera(ramal_raw):
     return None, None
 
 def deducir_sentido_geometria(linea, lat, lon):
-    pts_nqn = TRAZAS_GEO.get(linea, {}).get("HACIA_NEUQUEN", [])
-    pts_plo = TRAZAS_GEO.get(linea, {}).get("HACIA_PLOTTIER", [])
+    pts_nqn = TRAZAS_DENSAS.get(linea, {}).get("HACIA_NEUQUEN", [])
+    pts_plo = TRAZAS_DENSAS.get(linea, {}).get("HACIA_PLOTTIER", [])
     d_nqn = min([distancia_km(lat, lon, p[0], p[1]) for p in pts_nqn], default=99)
     d_plo = min([distancia_km(lat, lon, p[0], p[1]) for p in pts_plo], default=99)
     if d_plo < d_nqn:
         return "Hacia Plottier", "HACIA_PLOTTIER", d_nqn, d_plo
     return "Hacia Neuquén", "HACIA_NEUQUEN", d_nqn, d_plo
+
+def indice_mas_cercano(lat, lon, traza):
+    mejor_idx, menor_d = 0, 999.0
+    for i, pt in enumerate(traza):
+        d = distancia_km(lat, lon, pt[0], pt[1])
+        if d < menor_d:
+            menor_d = d
+            mejor_idx = i
+    return mejor_idx, menor_d
 
 def procesar_nuevas_posiciones(detecciones):
     ahora = time.time()
@@ -252,40 +283,82 @@ def foto_perfil():
 
 @app.route('/api/parada')
 def api_parada():
+    """
+    SOLUCIÓN 1 ACTIVA (Cero consultas a Indalo al tocar paradas):
+    Calcula los arribos instantáneamente en memoria usando las unidades ya rastreadas
+    en ESTADO_GLOBAL['buses'] y la geometría densificada del recorrido.
+    """
     p_id_raw = request.args.get("id", "")
-    p_cod = request.args.get("cod", "")
-    p_linea = request.args.get("linea", "")
-    if not p_id_raw or not p_cod:
+    p_linea = normalizar_linea(request.args.get("linea", ""))
+    if not p_id_raw or not p_linea:
+        return jsonify({"arribos": []})
+
+    ids_consulta = [x.strip() for x in re.split(r'[,/]', p_id_raw) if x.strip()]
+    coords_parada = [MAPA_COORDS_PARADAS[pid] for pid in ids_consulta if pid in MAPA_COORDS_PARADAS]
+    if not coords_parada:
         return jsonify({"arribos": []})
 
     ahora = time.time()
-    clave_cache = f"{p_id_raw}_{p_cod}_{p_linea}"
-    if clave_cache in CACHE_PARADAS and ahora - CACHE_PARADAS[clave_cache][0] < 18:
-        return jsonify({"arribos": CACHE_PARADAS[clave_cache][1]})
+    arribos_calculados = []
 
-    ids_consulta = [x.strip() for x in p_id_raw.split(",") if x.strip()][:3]
-    arribos_totales = []
+    for bus in ESTADO_GLOBAL["buses"].values():
+        if bus["linea"] != p_linea or (ahora - bus["last_gps_at"]) > 240:
+            continue
 
-    for pid in ids_consulta:
-        try:
-            r = requests.get(f"{URL_WORKER}parada", params={"id": pid, "cod": p_cod, "linea": p_linea}, timeout=7)
-            if r.status_code == 200:
-                for a in r.json().get("arribos", []):
-                    sent_real, _ = deducir_sentido_bandera(a.get("ramal"))
-                    if sent_real:
-                        a["sentido"] = sent_real
-                    arribos_totales.append(a)
-        except Exception:
-            pass
+        sentido_code = bus["sentido_code"]
+        traza = TRAZAS_DENSAS.get(p_linea, {}).get(sentido_code, [])
+        vel_kmh = max(22.0, min(float(bus.get("vel_kmh") or 32.0), 48.0))
 
-    if arribos_totales:
-        procesar_nuevas_posiciones(filtrar_arribos_unicos(arribos_totales, p_linea))
-        CACHE_PARADAS[clave_cache] = (ahora, arribos_totales)
-        return jsonify({"arribos": arribos_totales})
+        if len(traza) >= 2:
+            idx_bus, dist_bus_traza = indice_mas_cercano(bus["lat"], bus["lon"], traza)
+            # Buscar cuál de las paradas del grupo corresponde al sentido de este colectivo
+            mejor_idx_stop, menor_dist_stop = -1, 999.0
+            for (plat, plon) in coords_parada:
+                idx_s, dist_s = indice_mas_cercano(plat, plon, traza)
+                if dist_s < menor_dist_stop:
+                    menor_dist_stop = dist_s
+                    mejor_idx_stop = idx_s
 
-    if clave_cache in CACHE_PARADAS and ahora - CACHE_PARADAS[clave_cache][0] < 75:
-        return jsonify({"arribos": CACHE_PARADAS[clave_cache][1]})
-    return jsonify({"arribos": []})
+            # Verificar que la parada pertenezca a este sentido (< 180m de la traza) y el colectivo no la haya pasado
+            if menor_dist_stop <= 0.18 and mejor_idx_stop >= idx_bus - 1:
+                dist_recorrido_km = max(0.0, (mejor_idx_stop - idx_bus) * 0.025)
+                if dist_recorrido_km <= 0.07:
+                    tiempo_txt = "Llegando"
+                    min_orden = 0
+                else:
+                    min_orden = max(1, int(round((dist_recorrido_km / vel_kmh) * 60)))
+                    tiempo_txt = f"{min_orden} min. aprox."
+
+                arribos_calculados.append({
+                    "ramal": bus["ramal"],
+                    "sentido": bus["sentido"],
+                    "tiempo": tiempo_txt,
+                    "lat": bus["lat"],
+                    "lon": bus["lon"],
+                    "_min": min_orden
+                })
+                continue
+
+        # Respaldo geométrico si el colectivo va por un desvío fuera de la traza habitual
+        plat, plon = coords_parada[0]
+        delta_lon = plon - bus["lon"]
+        viene_hacia_aca = (sentido_code == "HACIA_NEUQUEN" and delta_lon > -0.001) or \
+                          (sentido_code == "HACIA_PLOTTIER" and delta_lon < 0.001)
+        if viene_hacia_aca:
+            dist_km = distancia_km(bus["lat"], bus["lon"], plat, plon) * 1.25
+            if dist_km <= 14.0:
+                min_orden = max(1, int(round((dist_km / vel_kmh) * 60)))
+                arribos_calculados.append({
+                    "ramal": bus["ramal"],
+                    "sentido": bus["sentido"],
+                    "tiempo": f"{min_orden} min. aprox.",
+                    "lat": bus["lat"],
+                    "lon": bus["lon"],
+                    "_min": min_orden
+                })
+
+    arribos_calculados.sort(key=lambda x: x["_min"])
+    return jsonify({"arribos": arribos_calculados[:4]})
 
 @app.route('/api/radar')
 def api_radar():
