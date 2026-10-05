@@ -130,7 +130,7 @@ def formatear_sentido_humano(linea, sentido_code):
 
 def extraer_minutos(tiempo_str):
     txt = str(tiempo_str or "").upper()
-    if "LLEGANDO" in txt or "AHORA" in txt:
+    if any(k in txt for k in ("LLEGANDO", "AHORA", "PARADA", "PROX", "PRÓX", "MENOS")):
         return 0
     m = re.search(r'(\d+)', txt)
     return int(m.group(1)) if m else 999
