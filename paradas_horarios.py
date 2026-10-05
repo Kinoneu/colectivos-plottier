@@ -57,7 +57,7 @@ PUNTOS_CONTROL_OFICIALES = [
         "nombreOficial": "Casa de la Cultura",
         "lat": -38.950627, "lon": -68.225753, "radio_mts": 130,
         "cols50A": [{"idx": 7, "offset": 0, "label": "Regreso a Plottier"}],
-        "cols50B": [{"idx": 1, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 6, "offset": -4, "label": "Regreso a Plottier"}],
+        "cols50B": [{"idx": 1, "offset": 0, "label": "Hacia Neuquén"}],
         "cols50R": []
     },
     {
@@ -73,7 +73,7 @@ PUNTOS_CONTROL_OFICIALES = [
         "nombreOficial": "Ruta 22 y Riavitz",
         "lat": -38.956680, "lon": -68.226224, "radio_mts": 150,
         "cols50A": [{"idx": 5, "offset": 0, "label": "Regreso a Plottier"}],
-        "cols50B": [{"idx": 2, "offset": 6, "label": "Hacia Neuquén"}, {"idx": 5, "offset": 12, "label": "Regreso a Plottier"}],
+        "cols50B": [{"idx": 2, "offset": 6, "label": "Hacia Neuquén"}],
         "cols50R": [{"idx": 1, "offset": -2, "label": "Hacia Neuquén"}, {"idx": 7, "offset": 2, "label": "Hacia El Mangrullo"}]
     },
     {
@@ -81,7 +81,7 @@ PUNTOS_CONTROL_OFICIALES = [
         "nombreOficial": "Ruta 22 Altura ETOP",
         "lat": -38.955620, "lon": -68.218591, "radio_mts": 140,
         "cols50A": [{"idx": 5, "offset": -2, "label": "Regreso a Plottier"}],
-        "cols50B": [{"idx": 2, "offset": 8, "label": "Hacia Neuquén"}, {"idx": 5, "offset": 10, "label": "Regreso a Plottier"}],
+        "cols50B": [{"idx": 2, "offset": 8, "label": "Hacia Neuquén"}],
         "cols50R": [{"idx": 1, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 7, "offset": 0, "label": "Hacia El Mangrullo"}]
     },
     {
@@ -111,7 +111,7 @@ PUNTOS_CONTROL_OFICIALES = [
     {
         "key": "PARQUE_CENTRAL_NQN",
         "nombreOficial": "Parque Central Neuquén (50R)",
-        "lat": -38.957187, "lon": -68.056286, "radio_mts": 160,
+        "lat": -38.957187, "lon": -68.056286, "radio_mts": 245,
         "cols50A": [{"idx": 3, "offset": 5, "label": "Paso por Centro"}],
         "cols50B": [{"idx": 4, "offset": 5, "label": "Paso por Centro"}],
         "cols50R": [{"idx": 4, "offset": 0, "label": "Cabecera Neuquén"}]
@@ -129,15 +129,27 @@ PUNTOS_CONTROL_OFICIALES = [
 ORDEN_PARADAS = {
     "50A": {
         "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "RIO_COLORADO_IDA", "RUTA22_ETON", "SAN_JUAN_BSAS"],
-        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RUTA22_ETON", "RIO_COLORADO_IDA", "RUTA22_ETOP", "RUTA22_RIAVITZ", "AMANCAY_MUTICIAS", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
+        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "PARQUE_CENTRAL_NQN", "RUTA22_ETON", "RIO_COLORADO_IDA", "RUTA22_ETOP", "RUTA22_RIAVITZ", "AMANCAY_MUTICIAS", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
     },
     "50B": {
         "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "CASA_CULTURA", "AMANCAY_MUTICIAS", "RUTA22_RIAVITZ", "RUTA22_ETOP", "RIO_COLORADO_IDA", "RUTA22_ETON", "SAN_JUAN_BSAS"],
-        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "RUTA22_ETON", "RIO_COLORADO_IDA", "RUTA22_ETOP", "RUTA22_RIAVITZ", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
+        "HACIA_PLOTTIER": ["SAN_JUAN_BSAS", "PARQUE_CENTRAL_NQN", "RUTA22_ETON", "RIO_COLORADO_IDA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
     },
     "50R": {
         "HACIA_NEUQUEN": ["EL_MANGRULLO", "RUTA22_RIAVITZ", "RUTA22_ETOP", "RIO_COLORADO_IDA", "RUTA22_ETON", "PARQUE_CENTRAL_NQN"],
         "HACIA_PLOTTIER": ["PARQUE_CENTRAL_NQN", "RUTA22_ETON", "RIO_COLORADO_IDA", "RUTA22_ETOP", "RUTA22_RIAVITZ", "EL_MANGRULLO"]
+    },
+    "URBANO": {
+        "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "CASA_CULTURA", "AMANCAY_MUTICIAS", "RUTA22_ETOP"],
+        "HACIA_PLOTTIER": ["RUTA22_ETOP", "AMANCAY_MUTICIAS", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "LOTEO_SOCIAL"]
+    },
+    "52 CENTRO": {
+        "HACIA_NEUQUEN": ["RUTA22_ETOP", "RUTA22_RIAVITZ", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "RIO_COLORADO_IDA"],
+        "HACIA_PLOTTIER": ["RIO_COLORADO_IDA", "SAN_MARTIN_TRABAJO", "RUTA22_ETOP"]
+    },
+    "52 UNION": {
+        "HACIA_NEUQUEN": ["RUTA22_ETOP", "RUTA22_RIAVITZ", "CASA_CULTURA", "SAN_MARTIN_TRABAJO", "RIO_COLORADO_IDA"],
+        "HACIA_PLOTTIER": ["RIO_COLORADO_IDA", "SAN_MARTIN_TRABAJO", "RUTA22_ETOP"]
     },
     "DEFAULT": {
         "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "CASA_CULTURA", "RUTA22_RIAVITZ", "RUTA22_ETOP", "RIO_COLORADO_IDA", "SAN_JUAN_BSAS"],
@@ -160,14 +172,15 @@ def _fusionar_linea_en_grupo(grupo, id_p, lineas):
                     grupo["lineas"][lin_nom]["ids"].insert(0, id_p)
                 else:
                     grupo["lineas"][lin_nom]["ids"].append(id_p)
-                grupo["lineas"][lin_nom]["parada"] = ",".join(grupo["lineas"][lin_nom]["ids"][:3])
+                # Conservamos todos los IDs del nodo para que /api/parada evalúe ambas manos sin perder paradas
+                grupo["lineas"][lin_nom]["parada"] = ",".join(grupo["lineas"][lin_nom]["ids"])
     if id_p not in grupo["ids"]:
         grupo["ids"].append(id_p)
 
 def agrupar_paradas_inteligente(paradas_raw, radio_comun_mts=35):
     """
-    1) Crea primero las 11 Paradas Oficiales de Planilla absorbiendo todas las líneas cercanas (130m a 230m)
-       para que en puntos como ETOP, Río Colorado, Riavitz o ETON estén todas las líneas (50A, 50B, 50R, Urbano, 52).
+    1) Crea primero las 11 Paradas Oficiales de Planilla absorbiendo todas las líneas cercanas
+       para que en puntos clave estén disponibles todas las líneas que pasan por allí.
     2) Agrupa el resto de las paradas comunes cada 35 metros.
     """
     grupos_oficiales = []
@@ -298,10 +311,9 @@ PLANILLAS_OFICIALES = {
         "columnas": ["Loteo Social", "Casa Cultura", "Amancay y Muticias", "Río Colorado (Ida)", "San Juan y Bs As", "Río Colorado (Vta)", "San Martín y Trabajo", "Loteo Social"],
         "filas": construir_filas(
             [
-                ["04:30","04:45","05:00","05:20","05:23","06:00","06:20","06:32"],
-                ["05:15","05:30","05:45","06:05","06:08","06:45","07:05","07:17"],
-                ["06:00","06:15","06:30","06:50","06:53","07:30","07:50","08:02"],
-                ["06:45","07:00","07:15","07:35","07:38","08:15","08:35","08:47"]
+                ["04:30","04:45","05:00","05:20","05:55","06:32","06:52","07:04"],
+                ["05:15","05:30","05:45","06:05","06:40","07:17","07:37","07:49"],
+                ["06:00","06:15","06:30","06:50","07:25","08:02","08:22","08:34"]
             ],
             ["06:44","07:29","08:14","08:59","09:32","10:17","11:02","11:47","12:20","13:05","13:50","14:35","15:08","15:53","16:38","17:23","17:56","18:41","19:26","20:11","20:44","21:29","22:14"],
             [0, 15, 15, 20, 37, 37, 20, 12],
@@ -327,10 +339,12 @@ PLANILLAS_OFICIALES = {
         "columnas": ["El Mangrullo", "Ruta 22 ETOP (Ida)", "Altura Aeropuerto (Ida)", "Altura ETON (Ida)", "Parque Central Nqn", "Altura ETON (Vta)", "Altura Aeropuerto (Vta)", "Ruta 22 ETOP (Vta)", "El Mangrullo"],
         "filas": construir_filas(
             [],
-            ["05:15","06:10","07:05","08:15","09:10","10:05","11:15","12:10","13:05","14:15","15:10","16:05","17:15","18:10","19:05","20:15","21:10","22:05","23:15"],
+            ["05:15","06:10","07:05","08:15","09:10","10:05","11:15","12:10","13:05","14:15","15:10","16:05","17:15","18:10","19:05","20:15","21:10","22:05"],
             [0, 48, 12, 7, 18, 18, 7, 13, 47],
             ["-","-","-","-","00:30","00:48","00:55","01:08","01:55"]
-        )
+        ) + [
+            ["23:15","00:03","00:15","00:22","00:40","00:58","01:05","01:18","02:05"]
+        ]
     }
 }
 
@@ -760,7 +774,7 @@ HTML_COMPLETO = """
       Surgió originalmente como una herramienta para mi familia ante la falta de una forma práctica de ver los colectivos y sus recorridos en tiempo real, y decidí abrirla a la comunidad. Cada quien es totalmente libre de usarla y compartirla con quien guste.
     </p>
     <div class="beta-notice">
-      ⚠️️ <strong>Aviso importante:</strong> La aplicación se encuentra en fase <strong>Beta y en constante desarrollo</strong>. Las ubicaciones en movimiento y los tiempos son estimaciones basadas en los reportes del sistema, por lo que pueden existir demoras o errores y los datos deben tomarse de forma orientativa.
+      ⚠ <strong>Aviso importante:</strong> La aplicación se encuentra en fase <strong>Beta y en constante desarrollo</strong>. Las ubicaciones en movimiento y los tiempos son estimaciones basadas en los reportes del sistema, por lo que pueden existir demoras o errores y los datos deben tomarse de forma orientativa.
     </div>
     <div class="author-row">
       <div class="author-info">
@@ -791,7 +805,6 @@ HTML_COMPLETO = """
     let busesSim = {};
     let RUTAS_GEO = {};
     let RUTAS_DENSAS = {};
-    let PARADAS_LISTA = [];
     let PUNTOS_CONTROL_OFICIALES = [];
     let ORDEN_PARADAS_OFICIALES = {};
     let PLANILLAS_INDALO = {};
@@ -813,6 +826,31 @@ HTML_COMPLETO = """
       return `${h}:${m}`;
     }
 
+    function hhmmAMinutos(hhmm) {
+      const partes = String(hhmm).split(':');
+      return parseInt(partes[0], 10) * 60 + parseInt(partes[1], 10);
+    }
+
+    function obtenerMinutoInicioFila(fila) {
+      for (const c of fila) {
+        if (c && c !== "-") return hhmmAMinutos(c);
+      }
+      return 0;
+    }
+
+    function calcularDiferenciaHorario(minPasoBase, minInicioFila, minActual) {
+      // Si la celda cruza la medianoche respecto del inicio de su propia fila, pertenece a la madrugada (+1440)
+      const minPasoMonotono = (minPasoBase < minInicioFila && minInicioFila >= 1080)
+        ? minPasoBase + 1440
+        : minPasoBase;
+
+      // Si el reloj actual está en la madrugada (00:00 a 02:15), evaluamos también contra el cierre nocturno (+1440)
+      if (minActual < 135 && minPasoMonotono >= 1440) {
+        return minPasoMonotono - (minActual + 1440);
+      }
+      return minPasoMonotono - minActual;
+    }
+
     function obtenerMinutosActualesArgentina() {
       const ahora = new Date();
       const fmt = new Intl.DateTimeFormat('en-US', {
@@ -825,16 +863,25 @@ HTML_COMPLETO = """
         if (p.type === 'minute') m = parseInt(p.value, 10);
         if (p.type === 'weekday') wd = p.value;
       }
+      const minActual = h * 60 + m;
+
+      // Entre las 00:00 y las 02:10 siguen circulando los últimos servicios del día operativo anterior
+      let wdOperativo = wd;
+      if (minActual < 130) {
+        const mapaPrevio = { Mon: 'Sun', Tue: 'Mon', Wed: 'Tue', Thu: 'Wed', Fri: 'Thu', Sat: 'Fri', Sun: 'Sat' };
+        wdOperativo = mapaPrevio[wd] || wd;
+      }
+
       let sufijoDia = 'HABIL';
       let etiquetaDia = 'Día Hábil';
-      if (wd === 'Sat') {
+      if (wdOperativo === 'Sat') {
         sufijoDia = 'SAB';
         etiquetaDia = 'Sábado';
-      } else if (wd === 'Sun') {
+      } else if (wdOperativo === 'Sun') {
         sufijoDia = 'DOM';
         etiquetaDia = 'Domingo';
       }
-      return { minActual: h * 60 + m, sufijoDia: sufijoDia, etiquetaDia: etiquetaDia };
+      return { minActual: minActual, sufijoDia: sufijoDia, etiquetaDia: etiquetaDia };
     }
 
     function resolverClavePlanilla(linNom, sufijoDia) {
@@ -918,7 +965,7 @@ HTML_COMPLETO = """
       const infoTiempo = obtenerMinutosActualesArgentina();
 
       const colsSeleccionadas = new Set();
-      const celdasProximoArribo = new Set();
+      const celdasProximoArribo = new Map();
       const celdasProximasParadas = new Set();
       let primeraFilaResaltada = -1;
       let primeraColResaltada = -1;
@@ -944,13 +991,13 @@ HTML_COMPLETO = """
             data.filas.forEach((fila, rIdx) => {
               const hhmmBase = fila[cIdx];
               if (!hhmmBase || hhmmBase === "-") return;
+              const minInicioFila = obtenerMinutoInicioFila(fila);
               const hhmm = offsetMin !== 0 ? sumarMinutos(hhmmBase, offsetMin) : hhmmBase;
-              const partes = hhmm.split(':');
-              const minPaso = parseInt(partes[0], 10) * 60 + parseInt(partes[1], 10);
-              let dif = minPaso - infoTiempo.minActual;
-              if (dif < -720) dif += 1440;
+              const minPaso = hhmmAMinutos(hhmm);
+              const dif = calcularDiferenciaHorario(minPaso, minInicioFila, infoTiempo.minActual);
+
               if (dif >= 0 && dif <= 240) {
-                candidatos.push({ rIdx, dif });
+                candidatos.push({ rIdx, dif, hhmm });
               }
             });
 
@@ -958,7 +1005,7 @@ HTML_COMPLETO = """
             const topFilas = candidatos.slice(0, 3);
 
             topFilas.forEach((item, orden) => {
-              celdasProximoArribo.add(`${item.rIdx}_${cIdx}`);
+              celdasProximoArribo.set(`${item.rIdx}_${cIdx}`, item.hhmm);
               if (primeraFilaResaltada === -1) primeraFilaResaltada = item.rIdx;
 
               if (orden < 2) {
@@ -991,19 +1038,24 @@ HTML_COMPLETO = """
       data.filas.forEach((fila, rIdx) => {
         h += `<tr id="sched-tr-${rIdx}">`;
         fila.forEach((celda, cIdx) => {
+          const keyCelda = `${rIdx}_${cIdx}`;
           const clases = [];
           if (colsSeleccionadas.has(cIdx)) clases.push('col-zone-active');
-          if (celdasProximoArribo.has(`${rIdx}_${cIdx}`)) {
+          if (celdasProximoArribo.has(keyCelda)) {
             clases.push('cell-next-arrival');
-          } else if (celdasProximasParadas.has(`${rIdx}_${cIdx}`)) {
+          } else if (celdasProximasParadas.has(keyCelda)) {
             clases.push('cell-next-stops');
           }
 
-          const prefijo = celdasProximoArribo.has(`${rIdx}_${cIdx}`)
+          const prefijo = celdasProximoArribo.has(keyCelda)
             ? '⏱ '
-            : (celdasProximasParadas.has(`${rIdx}_${cIdx}`) ? '➔ ' : '');
+            : (celdasProximasParadas.has(keyCelda) ? '➔ ' : '');
 
-          h += `<td class="${clases.join(' ')}">${prefijo}${celda}</td>`;
+          const textoCelda = celdasProximoArribo.has(keyCelda)
+            ? celdasProximoArribo.get(keyCelda)
+            : celda;
+
+          h += `<td class="${clases.join(' ')}">${prefijo}${textoCelda}</td>`;
         });
         h += `</tr>`;
       });
@@ -1039,7 +1091,9 @@ HTML_COMPLETO = """
       const planilla = PLANILLAS_INDALO[clavePlan];
       if (!planilla) return null;
 
-      const etiquetaPlan = (linNom === "50R") ? "Hábil / Sáb" : infoTiempo.etiquetaDia;
+      const etiquetaPlan = (linNom === "50R")
+        ? (infoTiempo.sufijoDia === "DOM" ? "Ref. Hábil/Sáb" : "Hábil / Sáb")
+        : infoTiempo.etiquetaDia;
       const resultados = [];
 
       for (const cInfo of cols) {
@@ -1048,11 +1102,11 @@ HTML_COMPLETO = """
         for (const fila of planilla.filas) {
           const hhmmBase = fila[cInfo.idx];
           if (!hhmmBase || hhmmBase === "-") continue;
+          const minInicioFila = obtenerMinutoInicioFila(fila);
           const hhmm = offsetMin !== 0 ? sumarMinutos(hhmmBase, offsetMin) : hhmmBase;
-          const partes = hhmm.split(':');
-          const minPaso = parseInt(partes[0], 10) * 60 + parseInt(partes[1], 10);
-          let dif = minPaso - infoTiempo.minActual;
-          if (dif < -720) dif += 1440;
+          const minPaso = hhmmAMinutos(hhmm);
+          const dif = calcularDiferenciaHorario(minPaso, minInicioFila, infoTiempo.minActual);
+
           if (dif >= 0 && dif <= 240) {
             proximos.push({ hora: hhmm, enMin: dif });
           }
@@ -1120,7 +1174,24 @@ HTML_COMPLETO = """
       return res;
     }
 
-    function encontrarIndiceMasCercano(lat, lon, pts) {
+    function encontrarIndiceMasCercano(lat, lon, pts, idxHint = null) {
+      if (!pts || pts.length === 0) return { index: 0, dist: Infinity };
+      if (idxHint !== null && idxHint >= 0 && idxHint < pts.length) {
+        const ini = Math.max(0, idxHint - 4);
+        const fin = Math.min(pts.length - 1, idxHint + 28);
+        let minLocalIdx = idxHint, minLocalDist = Infinity;
+        for (let i = ini; i <= fin; i++) {
+          const d = distMts(lat, lon, pts[i][0], pts[i][1]);
+          if (d < minLocalDist) {
+            minLocalDist = d;
+            minLocalIdx = i;
+          }
+        }
+        if (minLocalDist <= DIST_MAX_EN_RUTA_MTS * 2) {
+          return { index: minLocalIdx, dist: minLocalDist };
+        }
+      }
+
       let minIdx = 0, minDist = Infinity;
       for (let i = 0; i < pts.length; i++) {
         const d = distMts(lat, lon, pts[i][0], pts[i][1]);
@@ -1139,15 +1210,16 @@ HTML_COMPLETO = """
       return info.dist <= DIST_MAX_EN_RUTA_MTS;
     }
 
-    function deslizarMarcador(bus, destLat, destLon) {
+    function deslizarMarcador(bus, destLat, destLon, forzar = false) {
       const from = bus.marker.getLatLng();
       const to = L.latLng(destLat, destLon);
-      if (from.distanceTo(to) < 1) {
+      const dist = from.distanceTo(to);
+      if (dist < 1) {
         bus.simLat = destLat;
         bus.simLon = destLon;
         return;
       }
-      if (from.distanceTo(to) > 2500) {
+      if (dist > 2500) {
         bus.marker.setLatLng(to);
         bus.simLat = destLat;
         bus.simLon = destLon;
@@ -1155,10 +1227,13 @@ HTML_COMPLETO = """
       }
 
       let start = null;
-      const duration = 1200;
+      const duration = 950;
+      const tokenAnim = (bus._animToken || 0) + 1;
+      bus._animToken = tokenAnim;
 
       function step(timestamp) {
-        if (bus.enRuta) return;
+        if (bus._animToken !== tokenAnim) return;
+        if (!forzar && bus.enRuta) return;
         if (!start) start = timestamp;
         const progress = Math.min((timestamp - start) / duration, 1);
         const lat = from.lat + (to.lat - from.lat) * progress;
@@ -1183,7 +1258,7 @@ HTML_COMPLETO = """
       const traza = (RUTAS_DENSAS[bus.linea] && RUTAS_DENSAS[bus.linea][bus.sentido_code]) || [];
 
       if (traza.length > 2) {
-        const posBus = encontrarIndiceMasCercano(bus.simLat, bus.simLon, traza);
+        const posBus = encontrarIndiceMasCercano(bus.simLat, bus.simLon, traza, bus.trazaIdx);
         let mejorParada = null;
         let mejorIdxStop = Infinity;
 
@@ -1245,7 +1320,6 @@ HTML_COMPLETO = """
       const r = await fetch('/api/static_data');
       const staticData = await r.json();
       RUTAS_GEO = staticData.trazas;
-      PARADAS_LISTA = staticData.paradas_raw || [];
 
       const horariosJson = staticData.horarios_oficiales || {};
       PUNTOS_CONTROL_OFICIALES = horariosJson.puntos_control || [];
@@ -1291,7 +1365,6 @@ HTML_COMPLETO = """
         const puntoOficial = mapaDestacadas[idx] || null;
         const pKey = puntoOficial ? puntoOficial.key : "";
 
-        // Ordenar botones prolijamente: 50A, 50B, 50R, URBANO, 52 CENTRO, 52 UNION
         const ordenBotones = ["50A", "50B", "50R", "URBANO", "52 CENTRO", "52 UNION"];
         const clavesLineas = Object.keys(lineas).sort((a, b) => {
           const ia = ordenBotones.indexOf(a), ib = ordenBotones.indexOf(b);
@@ -1528,7 +1601,7 @@ HTML_COMPLETO = """
         const traza = (RUTAS_DENSAS[b.linea] && RUTAS_DENSAS[b.linea][b.sentido_code]) || [];
         if (traza.length < 2) continue;
 
-        const infoCercana = encontrarIndiceMasCercano(b.simLat, b.simLon, traza);
+        const infoCercana = encontrarIndiceMasCercano(b.simLat, b.simLon, traza, b.trazaIdx);
         if (infoCercana.dist > DIST_MAX_EN_RUTA_MTS) {
           b.enRuta = false;
           continue;
@@ -1550,6 +1623,7 @@ HTML_COMPLETO = """
             avanceMts = 0;
           }
         }
+        b.trazaIdx = idx;
 
         b.marker.setLatLng([b.simLat, b.simLon]);
       }
@@ -1614,6 +1688,7 @@ HTML_COMPLETO = """
         if (busesSim[b.id]) {
           const sim = busesSim[b.id];
           const saltoGps = distMts(sim.gpsLat, sim.gpsLon, b.lat, b.lon);
+          const cambioSentido = sim.sentido_code !== b.sentido_code;
 
           sim.gpsLat = b.lat;
           sim.gpsLon = b.lon;
@@ -1626,12 +1701,22 @@ HTML_COMPLETO = """
           sim.enRuta = dentroDeRuta;
 
           if (!dentroDeRuta) {
-            deslizarMarcador(sim, b.lat, b.lon);
-          } else if (saltoGps > 15) {
+            sim.trazaIdx = null;
+            deslizarMarcador(sim, b.lat, b.lon, true);
+          } else if (saltoGps > 15 || cambioSentido) {
             sim.pausaHastaMs = 0;
-            sim.simLat = b.lat;
-            sim.simLon = b.lon;
-            sim.marker.setLatLng([b.lat, b.lon]);
+            const traza = (RUTAS_DENSAS[b.linea] && RUTAS_DENSAS[b.linea][b.sentido_code]) || [];
+            const infoGps = encontrarIndiceMasCercano(b.lat, b.lon, traza, cambioSentido ? null : sim.trazaIdx);
+            const infoSim = encontrarIndiceMasCercano(sim.simLat, sim.simLon, traza, sim.trazaIdx);
+            const distSimAGps = distMts(sim.simLat, sim.simLon, b.lat, b.lon);
+
+            // Evita el salto hacia atrás ("rubber-banding") si el simulador solo se adelantó ligeramente (<90m)
+            if (!cambioSentido && infoSim.index >= infoGps.index && distSimAGps < 90) {
+              sim.vel_kmh = Math.max(16, (b.vel_kmh || 28) * 0.75);
+            } else {
+              sim.trazaIdx = infoGps.index;
+              deslizarMarcador(sim, b.lat, b.lon, true);
+            }
           }
 
           const nuevoEst = obtenerEstadoVisual(sim);
@@ -1644,12 +1729,15 @@ HTML_COMPLETO = """
             sim.marker.getPopup().setContent(generarHTMLPopup(sim));
           }
         } else {
+          const trazaIni = (RUTAS_DENSAS[b.linea] && RUTAS_DENSAS[b.linea][b.sentido_code]) || [];
+          const infoIni = encontrarIndiceMasCercano(b.lat, b.lon, trazaIni);
           const nuevoSim = {
             ...b,
             simLat: b.lat,
             simLon: b.lon,
             gpsLat: b.lat,
             gpsLon: b.lon,
+            trazaIdx: infoIni.index,
             enRuta: dentroDeRuta,
             enSemaforo: false,
             pausaHastaMs: 0,
