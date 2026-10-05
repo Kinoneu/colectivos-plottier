@@ -49,20 +49,29 @@ TRAZAS_DENSAS = {lin: {} for lin in MAPA_LINEAS.values()}
 def distancia_km(lat1, lon1, lat2, lon2):
     return math.sqrt(((lat1 - lat2) * 111.0) ** 2 + ((lon1 - lon2) * 111.0 * 0.777) ** 2)
 
-def densificar_traza(puntos, paso_km=0.025):
-    """Subdivide la polilínea cada 25 metros para calcular distancias exactas en memoria."""
+def densificar_traza_con_distancia(puntos, paso_km=0.020):
+    """
+    Subdivide la polilínea cada 20 metros y guarda en cada punto [lat, lon, km_acumulados]
+    para medir la distancia real exacta siguiendo las calles del recorrido.
+    """
     if not puntos or len(puntos) < 2:
-        return puntos or []
-    res = [puntos[0]]
+        return []
+    acum_km = 0.0
+    res = [[puntos[0][0], puntos[0][1], 0.0]]
     for i in range(len(puntos) - 1):
         p1, p2 = puntos[i], puntos[i + 1]
-        d = distancia_km(p1[0], p1[1], p2[0], p2[1])
-        pasos = max(1, int(math.ceil(d / paso_km)))
+        d_seg = distancia_km(p1[0], p1[1], p2[0], p2[1])
+        if d_seg < 0.0005:
+            continue
+        pasos = max(1, int(math.ceil(d_seg / paso_km)))
+        delta_d = d_seg / pasos
         for s in range(1, pasos + 1):
             t = s / pasos
+            acum_km += delta_d
             res.append([
                 round(p1[0] + (p2[0] - p1[0]) * t, 6),
-                round(p1[1] + (p2[1] - p1[1]) * t, 6)
+                round(p1[1] + (p2[1] - p1[1]) * t, 6),
+                round(acum_km, 4)
             ])
     return res
 
@@ -78,9 +87,9 @@ for rec in raw_recorridos:
         if p.get("latitud") and p.get("longitud")
     ]
     TRAZAS_GEO[lin][sentido] = pts
-    TRAZAS_DENSAS[lin][sentido] = densificar_traza(pts)
+    TRAZAS_DENSAS[lin][sentido] = densificar_traza_con_distancia(pts)
 
-# Diccionario rápido de coordenadas por ID de parada para cálculos en memoria
+# Diccionario rápido de coordenadas por ID de parada
 MAPA_COORDS_PARADAS = {str(p[0]).strip(): (float(p[1]), float(p[2])) for p in PARADAS_RAW}
 
 # Procesar y agrupar paradas usando el módulo externo
@@ -148,6 +157,47 @@ def indice_mas_cercano(lat, lon, traza):
             mejor_idx = i
     return mejor_idx, menor_d
 
+def encontrar_indice_parada_adelante(coords_parada, traza, idx_bus):
+    """
+    Busca si alguna de las coordenadas de la parada pertenece realmente a la traza
+    de ese sentido (a menos de 65 metros de la calle por donde pasa el colectivo).
+    Si la ruta pasa dos veces cerca en el bucle de cabecera, prioriza el tramo hacia adelante del colectivo.
+    """
+    candidatos = []
+    for (plat, plon) in coords_parada:
+        # En la zona de desvío de Av. Mosconi en Neuquén se permite mayor margen lateral
+        umbral_km = 0.22 if plon > -68.088 else 0.065
+        for i, pt in enumerate(traza):
+            d = distancia_km(plat, plon, pt[0], pt[1])
+            if d <= umbral_km:
+                candidatos.append((i, d))
+
+    if not candidatos:
+        return -1, 999.0
+
+    # Filtrar los puntos de la traza que estén por delante de la posición actual del colectivo
+    adelante = [c for c in candidatos if c[0] >= idx_bus - 2]
+    if adelante:
+        # Elegir el punto válido más cercano en distancia lateral (y más próximo en el recorrido actual)
+        adelante.sort(key=lambda x: (round(x[1], 2), x[0]))
+        return adelante[0][0], adelante[0][1]
+
+    return -1, 999.0
+
+def formatear_rango_arribo(dist_recorrido_km):
+    """
+    Convierte la distancia real por calle (en km) en un rango estimado de minutos
+    calibrado con las velocidades comerciales reales (incluyendo paradas y semáforos).
+    """
+    if dist_recorrido_km <= 0.16:
+        return "Llegando (< 1 min)", 0
+
+    # Velocidad comercial fluida (~25.5 km/h) vs velocidad con paradas/semáforos (~18.5 km/h)
+    min_rapido = max(1, int(math.floor((dist_recorrido_km / 25.5) * 60)))
+    min_lento = max(min_rapido + 2, int(math.ceil((dist_recorrido_km / 18.5) * 60)) + 1)
+
+    return f"Entre {min_rapido} y {min_lento} min", min_rapido
+
 def procesar_nuevas_posiciones(detecciones):
     ahora = time.time()
     for d in detecciones:
@@ -186,7 +236,7 @@ def procesar_nuevas_posiciones(detecciones):
                 sentido, sentido_code = bus["sentido"], bus["sentido_code"]
 
             if dist_avance > 0.012:
-                vel_kmh = round(max(18.0, min((dist_avance / dt) * 3600.0, 58.0)), 1)
+                vel_kmh = round(max(18.0, min((dist_avance / dt) * 3600.0, 45.0)), 1)
                 bus.update({"prev_lat": bus["lat"], "prev_lon": bus["lon"], "lat": lat, "lon": lon, "vel_kmh": vel_kmh, "last_gps_at": ahora})
             elif ahora - bus["last_gps_at"] < 120:
                 bus["last_gps_at"] = max(bus["last_gps_at"], ahora - 25)
@@ -211,7 +261,7 @@ def procesar_nuevas_posiciones(detecciones):
             ESTADO_GLOBAL["buses"][nuevo_id] = {
                 "id": nuevo_id, "linea": linea, "ramal": d.get("ramal") or f"Línea {linea}",
                 "sentido": sentido, "sentido_code": sentido_code, "lat": lat, "lon": lon,
-                "prev_lat": lat, "prev_lon": lon, "vel_kmh": 34.0,
+                "prev_lat": lat, "prev_lon": lon, "vel_kmh": 28.0,
                 "cabecera": detectar_cabecera(lat, lon), "last_gps_at": ahora, "updated_at": ahora
             }
 
@@ -284,9 +334,9 @@ def foto_perfil():
 @app.route('/api/parada')
 def api_parada():
     """
-    SOLUCIÓN 1 ACTIVA (Cero consultas a Indalo al tocar paradas):
-    Calcula los arribos instantáneamente en memoria usando las unidades ya rastreadas
-    en ESTADO_GLOBAL['buses'] y la geometría densificada del recorrido.
+    Calcula en memoria el rango estimado de llegada ('Entre X y Y min') midiendo
+    la distancia real sobre la traza de la línea, y descarta colectivos cuyo sentido
+    (IDA o VUELTA) no pase físicamente por esa parada.
     """
     p_id_raw = request.args.get("id", "")
     p_linea = normalizar_linea(request.args.get("linea", ""))
@@ -307,55 +357,35 @@ def api_parada():
 
         sentido_code = bus["sentido_code"]
         traza = TRAZAS_DENSAS.get(p_linea, {}).get(sentido_code, [])
-        vel_kmh = max(22.0, min(float(bus.get("vel_kmh") or 32.0), 48.0))
+        if len(traza) < 2:
+            continue
 
-        if len(traza) >= 2:
-            idx_bus, dist_bus_traza = indice_mas_cercano(bus["lat"], bus["lon"], traza)
-            # Buscar cuál de las paradas del grupo corresponde al sentido de este colectivo
-            mejor_idx_stop, menor_dist_stop = -1, 999.0
-            for (plat, plon) in coords_parada:
-                idx_s, dist_s = indice_mas_cercano(plat, plon, traza)
-                if dist_s < menor_dist_stop:
-                    menor_dist_stop = dist_s
-                    mejor_idx_stop = idx_s
+        # 1. Proyectar el colectivo sobre la traza de su sentido actual
+        idx_bus, dist_bus_traza = indice_mas_cercano(bus["lat"], bus["lon"], traza)
+        # Si el colectivo está en el desvío de obras de Av. Mosconi (lon > -68.088), permitir hasta 600m de distancia a la traza
+        limite_desvio_bus = 0.65 if bus["lon"] > -68.088 else 0.25
+        if dist_bus_traza > limite_desvio_bus:
+            continue
 
-            # Verificar que la parada pertenezca a este sentido (< 180m de la traza) y el colectivo no la haya pasado
-            if menor_dist_stop <= 0.18 and mejor_idx_stop >= idx_bus - 1:
-                dist_recorrido_km = max(0.0, (mejor_idx_stop - idx_bus) * 0.025)
-                if dist_recorrido_km <= 0.07:
-                    tiempo_txt = "Llegando"
-                    min_orden = 0
-                else:
-                    min_orden = max(1, int(round((dist_recorrido_km / vel_kmh) * 60)))
-                    tiempo_txt = f"{min_orden} min. aprox."
+        # 2. Verificar que esta parada realmente pertenezca al recorrido de este sentido (ej. 50B en Los Álamos es solo VUELTA)
+        idx_stop, dist_stop_traza = encontrar_indice_parada_adelante(coords_parada, traza, idx_bus)
+        if idx_stop == -1:
+            continue
 
-                arribos_calculados.append({
-                    "ramal": bus["ramal"],
-                    "sentido": bus["sentido"],
-                    "tiempo": tiempo_txt,
-                    "lat": bus["lat"],
-                    "lon": bus["lon"],
-                    "_min": min_orden
-                })
-                continue
+        # 3. Medir la distancia real en kilómetros siguiendo las calles de la traza
+        dist_recorrido_km = max(0.0, traza[idx_stop][2] - traza[idx_bus][2])
+        if dist_recorrido_km > 22.0:
+            continue
 
-        # Respaldo geométrico si el colectivo va por un desvío fuera de la traza habitual
-        plat, plon = coords_parada[0]
-        delta_lon = plon - bus["lon"]
-        viene_hacia_aca = (sentido_code == "HACIA_NEUQUEN" and delta_lon > -0.001) or \
-                          (sentido_code == "HACIA_PLOTTIER" and delta_lon < 0.001)
-        if viene_hacia_aca:
-            dist_km = distancia_km(bus["lat"], bus["lon"], plat, plon) * 1.25
-            if dist_km <= 14.0:
-                min_orden = max(1, int(round((dist_km / vel_kmh) * 60)))
-                arribos_calculados.append({
-                    "ramal": bus["ramal"],
-                    "sentido": bus["sentido"],
-                    "tiempo": f"{min_orden} min. aprox.",
-                    "lat": bus["lat"],
-                    "lon": bus["lon"],
-                    "_min": min_orden
-                })
+        tiempo_txt, min_orden = formatear_rango_arribo(dist_recorrido_km)
+        arribos_calculados.append({
+            "ramal": bus["ramal"],
+            "sentido": bus["sentido"],
+            "tiempo": tiempo_txt,
+            "lat": bus["lat"],
+            "lon": bus["lon"],
+            "_min": min_orden
+        })
 
     arribos_calculados.sort(key=lambda x: x["_min"])
     return jsonify({"arribos": arribos_calculados[:4]})
