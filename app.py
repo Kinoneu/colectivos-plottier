@@ -14,7 +14,6 @@ from flask import Flask, jsonify, render_template_string, request, send_file, Re
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Buscar e importar 'paradas_horarios.py' ya sea en la raíz del repo o en una subcarpeta
 def cargar_modulo_paradas():
     for root, _, files in os.walk(BASE_DIR):
         if "paradas_horarios.py" in files:
@@ -28,7 +27,6 @@ def cargar_modulo_paradas():
 
 MOD_PARADAS = cargar_modulo_paradas()
 
-# Cargar archivos base de paradas y recorridos
 with open(os.path.join(BASE_DIR, "paradas_optimizadas.json"), "r", encoding="utf-8") as f:
     PARADAS_RAW = json.load(f)
 
@@ -57,13 +55,25 @@ for rec in raw_recorridos:
         if p.get("latitud") and p.get("longitud")
     ]
 
-# Procesar y agrupar paradas usando el módulo externo
 PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 
 URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
-ESTADO_GLOBAL = {"timestamp": "--:--:--", "buses": {}, "contador_ids": 1, "idx_radar": 0, "ultimo_escaneo": 0.0}
+ESTADO_GLOBAL = {
+    "timestamp": "--:--:--",
+    "buses": {},
+    "contador_ids": 1,
+    "idx_radar": 0,
+    "ultimo_escaneo": 0.0,
+    "ultimo_aporte_usuario": 0.0
+}
 CACHE_PARADAS = {}
 RADAR_LOCK = Lock()
+
+def actualizar_reloj():
+    try:
+        ESTADO_GLOBAL["timestamp"] = datetime.now(zoneinfo.ZoneInfo("America/Argentina/Buenos_Aires")).strftime("%H:%M:%S")
+    except Exception:
+        ESTADO_GLOBAL["timestamp"] = time.strftime("%H:%M:%S")
 
 def distancia_km(lat1, lon1, lat2, lon2):
     return math.sqrt(((lat1 - lat2) * 111.0) ** 2 + ((lon1 - lon2) * 111.0 * 0.777) ** 2)
@@ -124,8 +134,11 @@ def procesar_nuevas_posiciones(detecciones):
             lat, lon = float(d.get("lat") or 0), float(d.get("lon") or 0)
         except (ValueError, TypeError):
             continue
+        # Filtro geográfico básico para ignorar coordenadas inválidas fuera del Alto Valle
+        if not (-39.20 <= lat <= -38.75 and -68.55 <= lon <= -67.90):
+            continue
         linea = normalizar_linea(d.get("linea"))
-        if not lat or not lon or not linea:
+        if not linea:
             continue
 
         sentido_bandera, code_bandera = deducir_sentido_bandera(d.get("ramal"))
@@ -185,8 +198,9 @@ def procesar_nuevas_posiciones(detecciones):
             }
 
     ESTADO_GLOBAL["buses"] = {k: v for k, v in ESTADO_GLOBAL["buses"].items() if ahora - v["last_gps_at"] < 480}
+    actualizar_reloj()
 
-def ejecutar_paso_radar(cantidad_paradas=5):
+def ejecutar_paso_radar(cantidad_paradas=3):
     if not RADAR_LOCK.acquire(blocking=False):
         return
     try:
@@ -210,27 +224,51 @@ def ejecutar_paso_radar(cantidad_paradas=5):
                     procesar_nuevas_posiciones(filtrar_arribos_unicos(rp.json().get("arribos", []), p_lin))
             except Exception:
                 pass
-
-        try:
-            ESTADO_GLOBAL["timestamp"] = datetime.now(zoneinfo.ZoneInfo("America/Argentina/Buenos_Aires")).strftime("%H:%M:%S")
-        except Exception:
-            ESTADO_GLOBAL["timestamp"] = time.strftime("%H:%M:%S")
     finally:
         RADAR_LOCK.release()
 
 def recolector_fondo():
     while True:
-        ejecutar_paso_radar(5)
-        time.sleep(9)
+        # Si hay usuarios activos aportando datos desde sus dispositivos, Render reduce sus propias consultas para no saturar
+        usuarios_aportando = (time.time() - ESTADO_GLOBAL.get("ultimo_aporte_usuario", 0)) < 35
+        ejecutar_paso_radar(2 if usuarios_aportando else 4)
+        time.sleep(14 if usuarios_aportando else 10)
 
 Thread(target=recolector_fondo, daemon=True).start()
+
+@app.route('/api/aportar', methods=['POST'])
+def api_aportar():
+    """
+    Recibe los arribos que consultaron directamente los dispositivos de los usuarios
+    y los integra al mapa global para todos los demás vecinos.
+    """
+    data = request.get_json(silent=True) or {}
+    linea = data.get("linea", "")
+    parada_key = data.get("parada_key", "")
+    arribos = data.get("arribos", [])
+
+    if not isinstance(arribos, list) or not linea:
+        return jsonify({"ok": False})
+
+    for a in arribos:
+        sent_real, _ = deducir_sentido_bandera(a.get("ramal"))
+        if sent_real:
+            a["sentido"] = sent_real
+
+    if arribos:
+        ESTADO_GLOBAL["ultimo_aporte_usuario"] = time.time()
+        procesar_nuevas_posiciones(filtrar_arribos_unicos(arribos, linea))
+        if parada_key:
+            CACHE_PARADAS[parada_key] = (time.time(), arribos)
+
+    return jsonify({"ok": True, "total_buses": len(ESTADO_GLOBAL["buses"])})
 
 @app.route('/ok')
 @app.route('/cron')
 @app.route('/ping')
 def ruta_cron_ok():
     if time.time() - ESTADO_GLOBAL.get("ultimo_escaneo", 0) > 4:
-        Thread(target=ejecutar_paso_radar, args=(8,), daemon=True).start()
+        Thread(target=ejecutar_paso_radar, args=(6,), daemon=True).start()
     return Response("<!DOCTYPE html><html><body style='background:#fff;color:#000;'>ok</body></html>", status=200, mimetype='text/html')
 
 @app.route('/logo.png')
@@ -260,7 +298,8 @@ def api_parada():
 
     ahora = time.time()
     clave_cache = f"{p_id_raw}_{p_cod}_{p_linea}"
-    if clave_cache in CACHE_PARADAS and ahora - CACHE_PARADAS[clave_cache][0] < 18:
+    # Si otro vecino consultó esta misma parada hace menos de 20 segundos, comparte el resultado al instante
+    if clave_cache in CACHE_PARADAS and ahora - CACHE_PARADAS[clave_cache][0] < 20:
         return jsonify({"arribos": CACHE_PARADAS[clave_cache][1]})
 
     ids_consulta = [x.strip() for x in p_id_raw.split(",") if x.strip()][:3]
