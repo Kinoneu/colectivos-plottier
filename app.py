@@ -19,6 +19,7 @@ BROWSER_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
 )
 
+# Buscar e importar 'paradas_horarios.py' priorizando la subcarpeta 'paradas-horarios'
 def cargar_modulo_paradas():
     ruta_pref = os.path.join(BASE_DIR, "paradas-horarios", "paradas_horarios.py")
     if os.path.isfile(ruta_pref):
@@ -100,17 +101,19 @@ for rec in raw_recorridos:
 MAPA_COORDS_PARADAS = {str(p[0]).strip(): (float(p[1]), float(p[2])) for p in PARADAS_RAW}
 PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 
-URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
+# Índice rápido de paradas por línea para rescate de unidades sin señal
+PARADAS_POR_LINEA = {lin: [] for lin in MAPA_LINEAS.values()}
+for p in PARADAS_RAW:
+    pid, plat, plon, _, dict_lin = p[0], float(p[1]), float(p[2]), p[3], p[4]
+    for lin_nom in dict_lin.keys():
+        if lin_nom in PARADAS_POR_LINEA:
+            PARADAS_POR_LINEA[lin_nom].append((str(pid).strip(), plat, plon))
+
 URL_INDALO_BASE = "https://cuandollega.smartmovepro.net/indalo/recorridos"
 URL_INDALO_API = "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribos"
+URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
 
-HTTP_SESSION = requests.Session()
-HTTP_SESSION.headers.update({
-    "User-Agent": BROWSER_UA,
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "es-AR,es;q=0.9,en;q=0.8"
-})
-
+# Sesión directa de Render hacia Indalo (Motor Principal)
 INDALO_SESSION = requests.Session()
 INDALO_SESSION.headers.update({
     "User-Agent": BROWSER_UA,
@@ -118,6 +121,13 @@ INDALO_SESSION.headers.update({
 })
 INDALO_AUTH = {"token": "", "ts": 0.0}
 INDALO_LOCK = Lock()
+
+# Sesión secundaria hacia el Cloudflare Worker (Exclusiva para Rescate de unidades sin señal)
+WORKER_SESSION = requests.Session()
+WORKER_SESSION.headers.update({
+    "User-Agent": BROWSER_UA,
+    "Accept": "application/json"
+})
 
 ESTADO_GLOBAL = {
     "timestamp": "--:--:--",
@@ -128,6 +138,25 @@ ESTADO_GLOBAL = {
     "ultimo_diag": "Iniciando..."
 }
 RADAR_LOCK = Lock()
+
+# Paradas estratégicas de cabecera (NV 2574 devuelve toda la flota activa de 50A y 50B)
+PARADAS_RADAR_DIRECTO = [
+    ("NV 2574", "1013", "50A"),
+    ("NV4120", "1013", "50A"),
+    ("NV8039", "1013", "50A"),
+    ("NV 2574", "1014", "50B"),
+    ("NV4120", "1014", "50B"),
+    ("NV1173", "1014", "50B"),
+    ("NV 4998", "1015", "50R"),
+    ("NV6001", "1015", "50R"),
+    ("NV5019", "1015", "50R"),
+    ("NV8064", "1109", "URBANO"),
+    ("51 00001", "1109", "URBANO"),
+    ("5200001", "1079", "52 CENTRO"),
+    ("5200047", "1079", "52 CENTRO"),
+    ("5200001", "1080", "52 UNION"),
+    ("5200047", "1080", "52 UNION")
+]
 
 def obtener_token_indalo_directo(forzar=False):
     ahora = time.time()
@@ -151,9 +180,10 @@ def obtener_token_indalo_directo(forzar=False):
             return INDALO_AUTH["token"]
     return ""
 
-def consultar_indalo_directo(p_id, p_cod, p_lin):
+def consultar_indalo_render(p_id, p_cod, p_lin):
     """
-    Réplica exacta del cURL de Indalo (envía cookie X-CSRF-TOKEN-CL + header requestverificationtoken).
+    Motor principal: Render consulta directamente a Indalo (SmartMovePro)
+    usando exactamente los mismos encabezados y payload que el navegador.
     """
     for intento in range(2):
         token = obtener_token_indalo_directo(forzar=(intento > 0))
@@ -207,32 +237,61 @@ def consultar_indalo_directo(p_id, p_cod, p_lin):
                     "lon": lon,
                     "_es_primario": tiene_parada
                 })
+            if arribos:
+                ESTADO_GLOBAL["ultimo_diag"] = f"Render Directo OK ({p_id} {p_lin}: {len(arribos)} reg)"
             return arribos
-        except Exception:
+        except Exception as e:
+            ESTADO_GLOBAL["ultimo_diag"] = f"Err Render Directo: {str(e)[:50]}"
             if intento == 0:
                 continue
     return []
 
-def consultar_parada_dual(p_id, p_cod, p_lin):
-    try:
-        rp = HTTP_SESSION.get(
-            f"{URL_WORKER}parada",
-            params={"id": p_id, "cod": p_cod, "linea": p_lin},
-            timeout=5
-        )
-        if rp.status_code == 200:
-            payload = rp.json()
-            arribos_w = payload.get("arribos") or []
-            if arribos_w:
-                ESTADO_GLOBAL["ultimo_diag"] = f"Worker OK ({p_id} {p_lin}: {len(arribos_w)} arribos)"
-                return arribos_w
-    except Exception as e:
-        ESTADO_GLOBAL["ultimo_diag"] = f"Worker err: {str(e)[:60]}"
+def buscar_paradas_cercanas_rescate(linea, lat_bus, lon_bus, limite=3):
+    """
+    Encuentra las 3 paradas más cercanas a la última ubicación conocida de un colectivo sin señal.
+    """
+    candidatas = PARADAS_POR_LINEA.get(linea, [])
+    if not candidatas:
+        return []
+    ordenadas = sorted(candidatas, key=lambda item: distancia_km(lat_bus, lon_bus, item[1], item[2]))
+    # Tomamos paradas entre 80 metros y 2.5 km alrededor de la unidad perdida
+    filtradas = [p[0] for p in ordenadas if 0.08 <= distancia_km(lat_bus, lon_bus, p[1], p[2]) <= 2.5]
+    return (filtradas or [p[0] for p in ordenadas[:limite]])[:limite]
 
-    arribos_dir = consultar_indalo_directo(p_id, p_cod, p_lin)
-    if arribos_dir:
-        ESTADO_GLOBAL["ultimo_diag"] = f"Directo Indalo OK ({p_id} {p_lin}: {len(arribos_dir)} arribos)"
-    return arribos_dir
+def rescatar_unidades_sin_senal_con_worker():
+    """
+    Revisa si hay unidades en ESTADO_GLOBAL que lleven > 45s sin actualizar su GPS
+    y le encarga ÚNICAMENTE al Cloudflare Worker rastrear las paradas cercanas a esa unidad.
+    """
+    ahora = time.time()
+    unidades_perdidas = [
+        b for b in list(ESTADO_GLOBAL["buses"].values())
+        if 45 <= (ahora - b["last_gps_at"]) <= 360
+        and (ahora - b.get("ultimo_rescate_at", 0)) >= 20
+    ]
+
+    for b in unidades_perdidas[:2]:
+        b["ultimo_rescate_at"] = ahora
+        linea = b["linea"]
+        cod = CODIGO_POR_LINEA.get(linea, "1013")
+        paradas_cercanas = buscar_paradas_cercanas_rescate(linea, b["lat"], b["lon"], limite=3)
+        if not paradas_cercanas:
+            continue
+        ids_str = ",".join(paradas_cercanas)
+        try:
+            rp = WORKER_SESSION.get(
+                f"{URL_WORKER}parada",
+                params={"id": ids_str, "cod": cod, "linea": linea},
+                timeout=5
+            )
+            if rp.status_code == 200:
+                arribos_w = rp.json().get("arribos") or []
+                if arribos_w:
+                    ESTADO_GLOBAL["ultimo_diag"] = f"Rescate Worker OK ({linea} en {ids_str})"
+                    filtrados = filtrar_arribos_viaje_actual(arribos_w, linea, max_minutos=150)
+                    procesar_nuevas_posiciones(filtrados)
+        except Exception:
+            pass
 
 def detectar_cabecera(lat, lon):
     for c_lat, c_lon, c_nom in MOD_PARADAS.CABECERAS_GEO:
@@ -266,11 +325,11 @@ def extraer_minutos(tiempo_str):
     m = re.search(r'(\d+)', txt)
     return int(m.group(1)) if m else 35
 
-def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=120):
+def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=150):
     """
-    Cuando una parada cabecera como 'NV 2574' devuelve cada colectivo dos veces
-    (ej. '35 aprox.' en 50A VUELTA- y '37 aprox.' en 50A IDA-), ordena por menor ETA
-    y conserva únicamente el viaje actual de cada unidad física (< 50m).
+    Ordena por menor tiempo de arribo y deduplica por cercanía (< 50m).
+    Así, cuando 'NV 2574' devuelve '35 aprox. (VUELTA)' y '37 aprox. (IDA)' para el mismo coche,
+    conserva el de 35 min (su viaje actual verdadero) y descarta el duplicado de la vuelta siguiente.
     """
     validos = []
     for a in arribos:
@@ -533,47 +592,33 @@ def procesar_nuevas_posiciones(detecciones):
             buses_limpios[k] = v
     ESTADO_GLOBAL["buses"] = buses_limpios
 
-# Paradas cabecera clave que siempre se aseguran aunque PARADAS_RADAR no esté actualizado
-RADAR_CABECERAS_FIJAS = [
-    ("NV 2574", "1013", "50A"),
-    ("NV4120", "1013", "50A"),
-    ("NV 2574", "1014", "50B"),
-    ("NV4120", "1014", "50B"),
-    ("NV 4998", "1015", "50R"),
-    ("NV6001", "1015", "50R"),
-    ("NV5019", "1015", "50R"),
-    ("NV8064", "1109", "URBANO"),
-    ("51 00001", "1109", "URBANO"),
-    ("5200001", "1079", "52 CENTRO"),
-    ("5200047", "1079", "52 CENTRO"),
-    ("5200001", "1080", "52 UNION"),
-    ("5200047", "1080", "52 UNION")
-]
-
-def ejecutar_paso_radar(cantidad_paradas=6):
+def ejecutar_paso_radar(cantidad_paradas=8):
     if not RADAR_LOCK.acquire(blocking=False):
         return
     try:
         ESTADO_GLOBAL["ultimo_escaneo"] = time.time()
-        paradas_radar = RADAR_CABECERAS_FIJAS
+        paradas_radar = PARADAS_RADAR_DIRECTO
         idx = ESTADO_GLOBAL["idx_radar"]
         lote = [paradas_radar[(idx + i) % len(paradas_radar)] for i in range(cantidad_paradas)]
         ESTADO_GLOBAL["idx_radar"] = (idx + cantidad_paradas) % len(paradas_radar)
 
-        # Agrupar detecciones por línea en el mismo lote para deduplicar por menor ETA entre cabeceras
+        # 1) Render consulta directamente a Indalo y agrupa por línea
         acumulado_por_linea = {}
         for p_id, p_cod, p_lin in lote:
             try:
-                arribos_raw = consultar_parada_dual(p_id, p_cod, p_lin)
+                arribos_raw = consultar_indalo_render(p_id, p_cod, p_lin)
                 if arribos_raw:
                     acumulado_por_linea.setdefault(p_lin, []).extend(arribos_raw)
             except Exception:
                 pass
-            time.sleep(0.18)
+            time.sleep(0.15)
 
         for lin, lista_raw in acumulado_por_linea.items():
-            arribos_unicos = filtrar_arribos_viaje_actual(lista_raw, lin, max_minutos=120)
+            arribos_unicos = filtrar_arribos_viaje_actual(lista_raw, lin, max_minutos=150)
             procesar_nuevas_posiciones(arribos_unicos)
+
+        # 2) El Worker de Cloudflare solo interviene si hay alguna unidad que perdió señal (>45s)
+        rescatar_unidades_sin_senal_con_worker()
 
         try:
             ESTADO_GLOBAL["timestamp"] = datetime.now(
@@ -585,11 +630,11 @@ def ejecutar_paso_radar(cantidad_paradas=6):
         RADAR_LOCK.release()
 
 def recolector_fondo():
-    # Primer barrido completo de todas las cabeceras al arrancar
-    ejecutar_paso_radar(len(RADAR_CABECERAS_FIJAS))
+    # Primer barrido completo de todas las líneas al iniciar Render
+    ejecutar_paso_radar(len(PARADAS_RADAR_DIRECTO))
     while True:
         time.sleep(7)
-        ejecutar_paso_radar(7)
+        ejecutar_paso_radar(8)
 
 Thread(target=recolector_fondo, daemon=True).start()
 
@@ -635,11 +680,12 @@ def api_parada():
         if b["linea"] == p_linea and (ahora - b["last_gps_at"]) <= 240
     ]
 
+    # Si el usuario toca una parada y aún no hay unidades de esa línea, Render consulta directo a Indalo
     if not buses_linea and ids_consulta:
         for pid_unico in ids_consulta[:2]:
-            nuevos = consultar_parada_dual(pid_unico, p_cod, p_linea)
+            nuevos = consultar_indalo_render(pid_unico, p_cod, p_linea)
             if nuevos:
-                filtrados = filtrar_arribos_viaje_actual(nuevos, p_linea, max_minutos=120)
+                filtrados = filtrar_arribos_viaje_actual(nuevos, p_linea, max_minutos=150)
                 procesar_nuevas_posiciones(filtrados)
                 break
         ahora = time.time()
@@ -689,9 +735,9 @@ def api_parada():
 def api_radar():
     ahora = time.time()
     if not ESTADO_GLOBAL["buses"] and (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 2:
-        ejecutar_paso_radar(len(RADAR_CABECERAS_FIJAS))
+        ejecutar_paso_radar(len(PARADAS_RADAR_DIRECTO))
     elif (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 7:
-        Thread(target=ejecutar_paso_radar, args=(7,), daemon=True).start()
+        Thread(target=ejecutar_paso_radar, args=(8,), daemon=True).start()
 
     ahora = time.time()
     lista = [
@@ -702,13 +748,13 @@ def api_radar():
 
 @app.route('/api/debug_radar')
 def api_debug_radar():
-    prueba = consultar_parada_dual("NV 2574", "1013", "50A")
+    prueba = consultar_indalo_render("NV 2574", "1013", "50A")
     if prueba:
-        procesar_nuevas_posiciones(filtrar_arribos_viaje_actual(prueba, "50A", max_minutos=120))
+        procesar_nuevas_posiciones(filtrar_arribos_viaje_actual(prueba, "50A", max_minutos=150))
     return jsonify({
         "timestamp": ESTADO_GLOBAL["timestamp"],
         "ultimo_diag": ESTADO_GLOBAL.get("ultimo_diag"),
-        "muestra_nv2574_50a": len(prueba),
+        "arribos_crudos_nv2574": len(prueba),
         "total_buses_en_memoria": len(ESTADO_GLOBAL["buses"]),
         "buses": list(ESTADO_GLOBAL["buses"].values())
     })
