@@ -14,8 +14,21 @@ from flask import Flask, jsonify, render_template_string, request, send_file, Re
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Buscar e importar 'paradas_horarios.py' ya sea en la raíz del repo o en una subcarpeta
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+)
+
+# Buscar e importar 'paradas_horarios.py' priorizando la carpeta 'paradas-horarios'
 def cargar_modulo_paradas():
+    ruta_pref = os.path.join(BASE_DIR, "paradas-horarios", "paradas_horarios.py")
+    if os.path.isfile(ruta_pref):
+        spec = importlib.util.spec_from_file_location("paradas_horarios", ruta_pref)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["paradas_horarios"] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
     for root, _, files in os.walk(BASE_DIR):
         if "paradas_horarios.py" in files:
             ruta_mod = os.path.join(root, "paradas_horarios.py")
@@ -28,7 +41,6 @@ def cargar_modulo_paradas():
 
 MOD_PARADAS = cargar_modulo_paradas()
 
-# Cargar archivos base de paradas y recorridos
 with open(os.path.join(BASE_DIR, "paradas_optimizadas.json"), "r", encoding="utf-8") as f:
     PARADAS_RAW = json.load(f)
 
@@ -43,6 +55,7 @@ MAPA_LINEAS = {
     "1079": "52 CENTRO",
     "1080": "52 UNION"
 }
+CODIGO_POR_LINEA = {v: k for k, v in MAPA_LINEAS.items()}
 TRAZAS_GEO = {lin: {} for lin in MAPA_LINEAS.values()}
 TRAZAS_DENSAS = {lin: {} for lin in MAPA_LINEAS.values()}
 
@@ -50,10 +63,6 @@ def distancia_km(lat1, lon1, lat2, lon2):
     return math.sqrt(((lat1 - lat2) * 111.0) ** 2 + ((lon1 - lon2) * 111.0 * 0.777) ** 2)
 
 def densificar_traza_con_distancia(puntos, paso_km=0.020):
-    """
-    Subdivide la polilínea cada 20 metros y guarda en cada punto [lat, lon, km_acumulados]
-    para medir la distancia real exacta siguiendo las calles del recorrido.
-    """
     if not puntos or len(puntos) < 2:
         return []
     acum_km = 0.0
@@ -93,15 +102,137 @@ MAPA_COORDS_PARADAS = {str(p[0]).strip(): (float(p[1]), float(p[2])) for p in PA
 PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 
 URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
+URL_INDALO_BASE = "https://cuandollega.smartmovepro.net/indalo/recorridos"
+URL_INDALO_API = "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribos"
+
 HTTP_SESSION = requests.Session()
+HTTP_SESSION.headers.update({
+    "User-Agent": BROWSER_UA,
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "es-AR,es;q=0.9,en;q=0.8"
+})
+
+INDALO_SESSION = requests.Session()
+INDALO_SESSION.headers.update({
+    "User-Agent": BROWSER_UA,
+    "Accept-Language": "es-AR,es;q=0.9,en;q=0.8"
+})
+INDALO_AUTH = {"token": "", "ts": 0.0}
+INDALO_LOCK = Lock()
+
 ESTADO_GLOBAL = {
     "timestamp": "--:--:--",
     "buses": {},
     "contador_ids": 1,
     "idx_radar": 0,
-    "ultimo_escaneo": 0.0
+    "ultimo_escaneo": 0.0,
+    "ultimo_diag": "Iniciando..."
 }
 RADAR_LOCK = Lock()
+
+def obtener_token_indalo_directo(forzar=False):
+    ahora = time.time()
+    if not forzar and INDALO_AUTH["token"] and (ahora - INDALO_AUTH["ts"]) < 480:
+        return INDALO_AUTH["token"]
+
+    with INDALO_LOCK:
+        if not forzar and INDALO_AUTH["token"] and (time.time() - INDALO_AUTH["ts"]) < 480:
+            return INDALO_AUTH["token"]
+        resp = INDALO_SESSION.get(URL_INDALO_BASE, timeout=7)
+        html = resp.text or ""
+        m = (
+            re.search(r'name=["\']__RequestVerificationToken["\'][^>]*value=["\']([^"\']+)["\']', html, re.I)
+            or re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']__RequestVerificationToken["\']', html, re.I)
+            or re.search(r'(CfDJ8[A-Za-z0-9_\-]{80,})', html)
+        )
+        if m:
+            INDALO_AUTH["token"] = m.group(1)
+            INDALO_AUTH["ts"] = time.time()
+            return INDALO_AUTH["token"]
+    return ""
+
+def consultar_indalo_directo(p_id, p_cod, p_lin):
+    """
+    Motor directo de respaldo hacia SmartMovePro desde Python si el Worker no devuelve datos.
+    """
+    for intento in range(2):
+        token = obtener_token_indalo_directo(forzar=(intento > 0))
+        if not token:
+            continue
+        try:
+            r = INDALO_SESSION.post(
+                URL_INDALO_API,
+                headers={
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
+                    "Content-Type": "application/json; charset=UTF-8",
+                    "Origin": "https://cuandollega.smartmovepro.net",
+                    "Referer": URL_INDALO_BASE,
+                    "RequestVerificationToken": token,
+                    "X-Requested-With": "XMLHttpRequest"
+                },
+                json={"IdentificadorParada": str(p_id).strip(), "CodigoLinea": str(p_cod).strip()},
+                timeout=6
+            )
+            if r.status_code in (400, 401, 403, 500) and intento == 0:
+                continue
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            raw_list = data.get("arribos") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            if not isinstance(raw_list, list):
+                return []
+            arribos = []
+            for a in raw_list:
+                if not isinstance(a, dict):
+                    continue
+                try:
+                    lat = float(str(a.get("latitud") or a.get("lat") or 0).replace(",", "."))
+                    lon = float(str(a.get("longitud") or a.get("lon") or 0).replace(",", "."))
+                except (ValueError, TypeError):
+                    continue
+                if not lat or not lon:
+                    continue
+                ramal = str(a.get("descripcionBandera") or a.get("abreviaturaBandera") or a.get("ramal") or p_lin)
+                tiempo = str(a.get("tiempoRestanteArribo") or a.get("tiempo") or "")
+                arribos.append({
+                    "ramal": ramal,
+                    "tiempo": tiempo,
+                    "tiempo_arribo": tiempo,
+                    "linea": p_lin,
+                    "lat": lat,
+                    "lon": lon
+                })
+            return arribos
+        except Exception:
+            if intento == 0:
+                continue
+    return []
+
+def consultar_parada_dual(p_id, p_cod, p_lin):
+    """
+    Intenta primero mediante Cloudflare Worker (con User-Agent de navegador).
+    Si el Worker falla o devuelve vacío, consulta directamente a SmartMovePro.
+    """
+    try:
+        rp = HTTP_SESSION.get(
+            f"{URL_WORKER}parada",
+            params={"id": p_id, "cod": p_cod, "linea": p_lin},
+            timeout=5
+        )
+        if rp.status_code == 200:
+            payload = rp.json()
+            arribos_w = payload.get("arribos") or []
+            if arribos_w:
+                ESTADO_GLOBAL["ultimo_diag"] = f"Worker OK ({p_id} {p_lin}: {len(arribos_w)} unidades)"
+                return arribos_w
+    except Exception as e:
+        ESTADO_GLOBAL["ultimo_diag"] = f"Worker err: {str(e)[:60]}"
+
+    # Respaldo directo a Indalo
+    arribos_dir = consultar_indalo_directo(p_id, p_cod, p_lin)
+    if arribos_dir:
+        ESTADO_GLOBAL["ultimo_diag"] = f"Directo Indalo OK ({p_id} {p_lin}: {len(arribos_dir)} unidades)"
+    return arribos_dir
 
 def detectar_cabecera(lat, lon):
     for c_lat, c_lon, c_nom in MOD_PARADAS.CABECERAS_GEO:
@@ -133,14 +264,12 @@ def extraer_minutos(tiempo_str):
     if any(k in txt for k in ("LLEGANDO", "AHORA", "PARADA", "PROX", "PRÓX", "MENOS")):
         return 0
     m = re.search(r'(\d+)', txt)
-    return int(m.group(1)) if m else 999
+    return int(m.group(1)) if m else 35
 
-def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=42):
+def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=110):
     """
-    Filtra los arribos devueltos por una parada testigo:
-    1) Descarta predicciones a futuro (> max_minutos) que corresponden a la vuelta siguiente
-       después de cambiar de cabecera.
-    2) Si la misma unidad aparece dos veces en una parada compartida, conserva solo el menor tiempo.
+    Conserva todas las unidades con coordenadas GPS reales hasta 110 minutos
+    (para cubrir viajes largos Plottier <-> Neuquén de 70-85 min) y deduplica por cercanía.
     """
     validos = []
     for a in arribos:
@@ -152,13 +281,14 @@ def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=42):
     unicos = []
     for a in ordenados:
         try:
-            lat, lon = float(a.get("lat") or 0), float(a.get("lon") or 0)
+            lat = float(str(a.get("lat") or 0).replace(",", "."))
+            lon = float(str(a.get("lon") or 0).replace(",", "."))
         except (ValueError, TypeError):
             continue
         if not lat or not lon:
             continue
         if not any(distancia_km(lat, lon, float(u["lat"]), float(u["lon"])) < 0.05 for u in unicos):
-            unicos.append({**a, "linea": linea})
+            unicos.append({**a, "lat": lat, "lon": lon, "linea": linea})
     return unicos
 
 def deducir_sentido_bandera(ramal_raw, linea=""):
@@ -172,7 +302,6 @@ def deducir_sentido_bandera(ramal_raw, linea=""):
 def indice_mas_cercano(lat, lon, traza, idx_previo=None):
     if not traza:
         return 0, 999.0
-    # Si conocemos el índice previo de la unidad, priorizamos continuidad hacia adelante en rulos
     if idx_previo is not None and 0 <= idx_previo < len(traza):
         inicio = max(0, idx_previo - 4)
         fin = min(len(traza), idx_previo + 35)
@@ -203,10 +332,6 @@ def deducir_sentido_geometria(linea, lat, lon):
     return formatear_sentido_humano(linea, "HACIA_NEUQUEN"), "HACIA_NEUQUEN", d_nqn, d_plo
 
 def deducir_sentido_por_avance(linea, prev_lat, prev_lon, lat, lon):
-    """
-    Compara en cuál de las dos trazas (IDA o VUELTA) el desplazamiento del colectivo
-    representa un avance positivo sobre el kilometraje acumulado del recorrido.
-    """
     mejor_code = None
     mayor_avance = 0.0
     for code in ("HACIA_NEUQUEN", "HACIA_PLOTTIER"):
@@ -225,10 +350,6 @@ def deducir_sentido_por_avance(linea, prev_lat, prev_lon, lat, lon):
     return None, None
 
 def encontrar_indice_parada_adelante(coords_parada, traza, idx_bus):
-    """
-    Encuentra el primer paso válido de la traza (por delante del colectivo) por la parada.
-    Evita tomar la segunda pasada en recorridos con bucles o rulos.
-    """
     mejor_idx_stop, menor_d_stop = -1, 999.0
     for (plat, plon) in coords_parada:
         umbral_km = 0.22 if plon > -68.088 else 0.065
@@ -243,7 +364,6 @@ def encontrar_indice_parada_adelante(coords_parada, traza, idx_bus):
                     d_pasada = d
                     idx_pasada = i
             elif en_zona:
-                # Salió del radio de la parada: nos quedamos con esta primera pasada
                 break
 
         if idx_pasada != -1:
@@ -291,9 +411,8 @@ def procesar_nuevas_posiciones(detecciones):
             if dist > 1.4:
                 continue
 
-            # Evitar que dos unidades de distinto sentido en plena ruta se fusionen entre sí
             if code_bandera and b.get("sentido_code") != code_bandera:
-                if not cabecera_actual and not b.get("cabecera") and dist > 0.06:
+                if not cabecera_actual and not b.get("cabecera") and dist > 0.06 and min_eta <= 45:
                     continue
                 score = dist + 0.35
             else:
@@ -308,11 +427,17 @@ def procesar_nuevas_posiciones(detecciones):
             dist_avance = distancia_km(bus["lat"], bus["lon"], lat, lon)
             dt = max(ahora - bus["last_gps_at"], 1.0)
 
-            # 1. En sectores donde las trazas de IDA y VUELTA van por distintas calles (>80m), manda la calle
             if abs(d_nqn - d_plo) > 0.08:
                 sentido, sentido_code = sentido_geo, code_geo
-            # 2. Si reporta bandera oficial, validamos que no sea la predicción de la vuelta siguiente
-            elif sentido_bandera:
+            elif dist_avance > 0.025:
+                sent_av, code_av = deducir_sentido_por_avance(linea, bus["lat"], bus["lon"], lat, lon)
+                if code_av:
+                    sentido, sentido_code = sent_av, code_av
+                elif sentido_bandera and min_eta <= 48:
+                    sentido, sentido_code = sentido_bandera, code_bandera
+                else:
+                    sentido, sentido_code = bus["sentido"], bus["sentido_code"]
+            elif sentido_bandera and min_eta <= 48:
                 eta_previa = bus.get("min_eta_radar", 999)
                 edad_eta_previa = ahora - bus.get("eta_radar_at", 0)
                 if code_bandera != bus["sentido_code"] and edad_eta_previa < 45 and min_eta > eta_previa + 4:
@@ -321,13 +446,6 @@ def procesar_nuevas_posiciones(detecciones):
                     sentido, sentido_code = sentido_bandera, code_bandera
                     bus["min_eta_radar"] = min_eta
                     bus["eta_radar_at"] = ahora
-            # 3. Si avanzó físicamente sobre una calle compartida sin bandera, medimos el avance en la traza
-            elif dist_avance > 0.025:
-                sent_av, code_av = deducir_sentido_por_avance(linea, bus["lat"], bus["lon"], lat, lon)
-                if code_av:
-                    sentido, sentido_code = sent_av, code_av
-                else:
-                    sentido, sentido_code = bus["sentido"], bus["sentido_code"]
             else:
                 sentido, sentido_code = bus["sentido"], bus["sentido_code"]
 
@@ -335,7 +453,6 @@ def procesar_nuevas_posiciones(detecciones):
                 bus["min_eta_radar"] = min_eta
                 bus["eta_radar_at"] = ahora
 
-            # Solo reiniciamos last_gps_at cuando el colectivo realmente se desplazó (>12 metros)
             if dist_avance > 0.012:
                 vel_kmh = round(max(18.0, min((dist_avance / dt) * 3600.0, 45.0)), 1)
                 traza_act = TRAZAS_DENSAS.get(linea, {}).get(sentido_code, [])
@@ -406,14 +523,13 @@ def procesar_nuevas_posiciones(detecciones):
                 "updated_at": ahora
             }
 
-    # Purga inteligente: mantiene unidades esperando en cabecera si siguen reportando, y limpia el resto
     buses_limpios = {}
     for k, v in ESTADO_GLOBAL["buses"].items():
         sin_mover = ahora - v["last_gps_at"]
         sin_ver = ahora - v.get("last_seen_at", v["last_gps_at"])
-        if v.get("cabecera") and sin_ver < 150 and sin_mover < 900:
+        if v.get("cabecera") and sin_ver < 180 and sin_mover < 900:
             buses_limpios[k] = v
-        elif sin_mover < 480 and sin_ver < 240:
+        elif sin_mover < 480 and sin_ver < 260:
             buses_limpios[k] = v
     ESTADO_GLOBAL["buses"] = buses_limpios
 
@@ -429,19 +545,13 @@ def ejecutar_paso_radar(cantidad_paradas=6):
 
         for p_id, p_cod, p_lin in lote:
             try:
-                rp = HTTP_SESSION.get(
-                    f"{URL_WORKER}parada",
-                    params={"id": p_id, "cod": p_cod, "linea": p_lin},
-                    timeout=6
-                )
-                if rp.status_code == 200:
-                    max_min = 62 if p_lin == "50R" else 42
-                    arribos_actuales = filtrar_arribos_viaje_actual(
-                        rp.json().get("arribos", []), p_lin, max_minutos=max_min
-                    )
+                arribos_raw = consultar_parada_dual(p_id, p_cod, p_lin)
+                if arribos_raw:
+                    arribos_actuales = filtrar_arribos_viaje_actual(arribos_raw, p_lin, max_minutos=110)
                     procesar_nuevas_posiciones(arribos_actuales)
             except Exception:
                 pass
+            time.sleep(0.25)
 
         try:
             ESTADO_GLOBAL["timestamp"] = datetime.now(
@@ -455,7 +565,7 @@ def ejecutar_paso_radar(cantidad_paradas=6):
 def recolector_fondo():
     while True:
         ejecutar_paso_radar(6)
-        time.sleep(8)
+        time.sleep(7)
 
 Thread(target=recolector_fondo, daemon=True).start()
 
@@ -488,17 +598,33 @@ def foto_perfil():
 def api_parada():
     p_id_raw = request.args.get("id", "")
     p_linea = normalizar_linea(request.args.get("linea", ""))
+    p_cod = request.args.get("cod", "") or CODIGO_POR_LINEA.get(p_linea, "1013")
     if not p_id_raw or not p_linea:
         return jsonify({"arribos": []})
 
     ids_consulta = [x.strip() for x in re.split(r'[,/]', p_id_raw) if x.strip()]
     coords_parada = [MAPA_COORDS_PARADAS[pid] for pid in ids_consulta if pid in MAPA_COORDS_PARADAS]
+
+    ahora = time.time()
+    buses_linea = [
+        b for b in ESTADO_GLOBAL["buses"].values()
+        if b["linea"] == p_linea and (ahora - b["last_gps_at"]) <= 240
+    ]
+
+    # Si no hay unidades activas de esa línea en memoria, consulta en vivo la parada solicitada
+    if not buses_linea and ids_consulta:
+        for pid_unico in ids_consulta[:2]:
+            nuevos = consultar_parada_dual(pid_unico, p_cod, p_linea)
+            if nuevos:
+                filtrados = filtrar_arribos_viaje_actual(nuevos, p_linea, max_minutos=110)
+                procesar_nuevas_posiciones(filtrados)
+                break
+        ahora = time.time()
+
     if not coords_parada:
         return jsonify({"arribos": []})
 
-    ahora = time.time()
     arribos_calculados = []
-
     for bus in ESTADO_GLOBAL["buses"].values():
         if bus["linea"] != p_linea or (ahora - bus["last_gps_at"]) > 240:
             continue
@@ -539,10 +665,8 @@ def api_parada():
 @app.route('/api/radar')
 def api_radar():
     ahora = time.time()
-    # Si no hay colectivos en memoria (ej. recién despierta Render), escanea en el acto
     if not ESTADO_GLOBAL["buses"] and (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 2:
-        ejecutar_paso_radar(8)
-    # Si el hilo de fondo demoró más de 7 segundos, lanza un barrido asíncrono
+        ejecutar_paso_radar(6)
     elif (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 7:
         Thread(target=ejecutar_paso_radar, args=(6,), daemon=True).start()
 
@@ -552,6 +676,19 @@ def api_radar():
         for b in ESTADO_GLOBAL["buses"].values()
     ]
     return jsonify({"timestamp": ESTADO_GLOBAL["timestamp"], "buses": lista, "total_buses": len(lista)})
+
+@app.route('/api/debug_radar')
+def api_debug_radar():
+    prueba = consultar_parada_dual("NV1012", "1013", "50A")
+    if prueba:
+        procesar_nuevas_posiciones(filtrar_arribos_viaje_actual(prueba, "50A", max_minutos=110))
+    return jsonify({
+        "timestamp": ESTADO_GLOBAL["timestamp"],
+        "ultimo_diag": ESTADO_GLOBAL.get("ultimo_diag"),
+        "muestra_nv1012_50a": len(prueba),
+        "total_buses_en_memoria": len(ESTADO_GLOBAL["buses"]),
+        "buses": list(ESTADO_GLOBAL["buses"].values())
+    })
 
 @app.route('/api/static_data')
 def api_static_data():
