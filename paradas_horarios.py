@@ -11,7 +11,10 @@ CABECERAS_GEO = [
     (-38.9840, -68.3494, "Cabecera B° Las Perlas"),
     (-38.9822, -68.3070, "Cabecera Las Perlas Este"),
     (-38.9461, -68.0575, "Cabecera Neuquén Centro"),
-    (-38.9571, -68.0562, "Cabecera Neuquén Parque Central")
+    (-38.9571, -68.0562, "Cabecera Neuquén Parque Central"),
+    (-38.9539, -68.2324, "Estación Plottier (Tren del Valle)"),
+    (-38.9563, -68.0591, "Estación Neuquén Central (Tren)"),
+    (-38.9392, -67.9975, "Estación Cipolletti (Tren)")
 ]
 
 PARADAS_RADAR = [
@@ -34,7 +37,42 @@ PARADAS_RADAR = [
     ("5200047", "1080", "52 UNION")
 ]
 
-# Puntos de control oficiales con radio de absorción amplio y cruce de horarios para 50A, 50B y 50R
+# Trazado ferroviario oficial del Tren del Valle (Plottier <-> Neuquén Central <-> Cipolletti)
+TRAZA_VIAL_TREN = [
+    [-38.953950, -68.232450], # Estación Plottier
+    [-38.954250, -68.225800], # Cruce Av. San Martín
+    [-38.954450, -68.218500], # Altura ETOP
+    [-38.954800, -68.206000], # Altura Sapag
+    [-38.955020, -68.196900], # Apeadero Constituyentes
+    [-38.955080, -68.192400], # Altura EPEA No 2
+    [-38.955120, -68.184500], # Altura Piscicultura
+    [-38.955150, -68.177750], # Apeadero Barrio Unión
+    [-38.955550, -68.167650], # Cruce Río Colorado
+    [-38.956250, -68.159750], # Apeadero Aeropuerto
+    [-38.956800, -68.153800], # Valentina Norte Rural
+    [-38.957150, -68.148150], # Apeadero El Cholar
+    [-38.957350, -68.139800], # Apeadero ETON
+    [-38.957550, -68.128000], # Solalique / Crouzeilles
+    [-38.958200, -68.117200], # Bejarano
+    [-38.958400, -68.106500], # Chrestia
+    [-38.958500, -68.093500], # Gatica
+    [-38.958550, -68.078950], # Apeadero Ignacio Rivas
+    [-38.958000, -68.066500], # Laínez
+    [-38.956300, -68.059100], # Estación Neuquén Central
+    [-38.956200, -68.051000], # Parque Central Este
+    [-38.955800, -68.040000], # Bahía Blanca / Santa Fe
+    [-38.954500, -68.027500], # Aproximación Río Neuquén
+    [-38.947800, -68.015500], # Puente Ferroviario Neuquén-Cipolletti
+    [-38.942500, -68.004500], # Ingreso Ferroviario Cipolletti
+    [-38.939200, -67.997500]  # Estación Cipolletti
+]
+
+TRAZA_TREN_GEO = {
+    "HACIA_NEUQUEN": TRAZA_VIAL_TREN,
+    "HACIA_PLOTTIER": list(reversed(TRAZA_VIAL_TREN))
+}
+
+# Puntos de control oficiales (11 de colectivos + 9 estaciones del Tren del Valle)
 PUNTOS_CONTROL_OFICIALES = [
     {
         "key": "LOTEO_SOCIAL",
@@ -42,7 +80,7 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.930393, "lon": -68.252000, "radio_mts": 150,
         "cols50A": [{"idx": 0, "offset": 0, "label": "Salida hacia Nqn"}],
         "cols50B": [{"idx": 0, "offset": 0, "label": "Salida hacia Nqn"}],
-        "cols50R": []
+        "cols50R": [], "colsTREN": []
     },
     {
         "key": "SAN_MARTIN_TRABAJO",
@@ -50,7 +88,7 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.944473, "lon": -68.225598, "radio_mts": 160,
         "cols50A": [{"idx": 1, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 7, "offset": 4, "label": "Regreso a Cabecera"}],
         "cols50B": [{"idx": 0, "offset": 8, "label": "Hacia Neuquén"}, {"idx": 6, "offset": 0, "label": "Regreso a Cabecera"}],
-        "cols50R": []
+        "cols50R": [], "colsTREN": []
     },
     {
         "key": "CASA_CULTURA",
@@ -58,7 +96,7 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.950627, "lon": -68.225753, "radio_mts": 130,
         "cols50A": [{"idx": 7, "offset": 0, "label": "Regreso a Plottier"}],
         "cols50B": [{"idx": 1, "offset": 0, "label": "Hacia Neuquén"}],
-        "cols50R": []
+        "cols50R": [], "colsTREN": []
     },
     {
         "key": "AMANCAY_MUTICIAS",
@@ -66,7 +104,7 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.964520, "lon": -68.243109, "radio_mts": 140,
         "cols50A": [{"idx": 6, "offset": 0, "label": "Regreso a Plottier"}],
         "cols50B": [{"idx": 2, "offset": 0, "label": "Hacia Neuquén"}],
-        "cols50R": []
+        "cols50R": [], "colsTREN": []
     },
     {
         "key": "RUTA22_RIAVITZ",
@@ -74,7 +112,8 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.956680, "lon": -68.226224, "radio_mts": 150,
         "cols50A": [{"idx": 5, "offset": 0, "label": "Regreso a Plottier"}],
         "cols50B": [{"idx": 2, "offset": 6, "label": "Hacia Neuquén"}],
-        "cols50R": [{"idx": 1, "offset": -2, "label": "Hacia Neuquén"}, {"idx": 7, "offset": 2, "label": "Hacia El Mangrullo"}]
+        "cols50R": [{"idx": 1, "offset": -2, "label": "Hacia Neuquén"}, {"idx": 7, "offset": 2, "label": "Hacia El Mangrullo"}],
+        "colsTREN": []
     },
     {
         "key": "RUTA22_ETOP",
@@ -82,7 +121,8 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.955620, "lon": -68.218591, "radio_mts": 140,
         "cols50A": [{"idx": 5, "offset": -2, "label": "Regreso a Plottier"}],
         "cols50B": [{"idx": 2, "offset": 8, "label": "Hacia Neuquén"}],
-        "cols50R": [{"idx": 1, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 7, "offset": 0, "label": "Hacia El Mangrullo"}]
+        "cols50R": [{"idx": 1, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 7, "offset": 0, "label": "Hacia El Mangrullo"}],
+        "colsTREN": []
     },
     {
         "key": "RIO_COLORADO_IDA",
@@ -90,7 +130,8 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.956568, "lon": -68.167666, "radio_mts": 230,
         "cols50A": [{"idx": 2, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 4, "offset": 0, "label": "Hacia Plottier"}],
         "cols50B": [{"idx": 3, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 5, "offset": 0, "label": "Hacia Plottier"}],
-        "cols50R": [{"idx": 2, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 6, "offset": 0, "label": "Hacia Plottier"}]
+        "cols50R": [{"idx": 2, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 6, "offset": 0, "label": "Hacia Plottier"}],
+        "colsTREN": []
     },
     {
         "key": "RUTA22_ETON",
@@ -98,7 +139,8 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.957999, "lon": -68.139772, "radio_mts": 220,
         "cols50A": [{"idx": 2, "offset": 7, "label": "Hacia Neuquén"}, {"idx": 4, "offset": -7, "label": "Hacia Plottier"}],
         "cols50B": [{"idx": 3, "offset": 7, "label": "Hacia Neuquén"}, {"idx": 5, "offset": -7, "label": "Hacia Plottier"}],
-        "cols50R": [{"idx": 3, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 5, "offset": 0, "label": "Hacia Plottier"}]
+        "cols50R": [{"idx": 3, "offset": 0, "label": "Hacia Neuquén"}, {"idx": 5, "offset": 0, "label": "Hacia Plottier"}],
+        "colsTREN": []
     },
     {
         "key": "SAN_JUAN_BSAS",
@@ -106,7 +148,7 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.944522, "lon": -68.057589, "radio_mts": 160,
         "cols50A": [{"idx": 3, "offset": 0, "label": "Cabecera Neuquén"}],
         "cols50B": [{"idx": 4, "offset": 0, "label": "Cabecera Neuquén"}],
-        "cols50R": []
+        "cols50R": [], "colsTREN": []
     },
     {
         "key": "PARQUE_CENTRAL_NQN",
@@ -114,15 +156,80 @@ PUNTOS_CONTROL_OFICIALES = [
         "lat": -38.957187, "lon": -68.056286, "radio_mts": 245,
         "cols50A": [{"idx": 3, "offset": 5, "label": "Paso por Centro"}],
         "cols50B": [{"idx": 4, "offset": 5, "label": "Paso por Centro"}],
-        "cols50R": [{"idx": 4, "offset": 0, "label": "Cabecera Neuquén"}]
+        "cols50R": [{"idx": 4, "offset": 0, "label": "Cabecera Neuquén"}],
+        "colsTREN": []
     },
     {
         "key": "EL_MANGRULLO",
         "nombreOficial": "El Mangrullo (Cabecera 50R)",
         "lat": -38.983140, "lon": -68.350601, "radio_mts": 180,
-        "cols50A": [],
-        "cols50B": [],
-        "cols50R": [{"idx": 0, "offset": 0, "label": "Salida hacia Nqn"}, {"idx": 8, "offset": 0, "label": "Llegada a Cabecera"}]
+        "cols50A": [], "cols50B": [],
+        "cols50R": [{"idx": 0, "offset": 0, "label": "Salida hacia Nqn"}, {"idx": 8, "offset": 0, "label": "Llegada a Cabecera"}],
+        "colsTREN": []
+    },
+    # --- ESTACIONES Y APEADEROS DEL TREN DEL VALLE ---
+    {
+        "key": "TREN_PLOTTIER",
+        "nombreOficial": "Estación Plottier (Tren del Valle)",
+        "lat": -38.953950, "lon": -68.232450, "radio_mts": 40, "soloTren": True,
+        "cols50A": [], "cols50B": [], "cols50R": [],
+        "colsTREN": [{"idx": 0, "offset": 0, "label": "Salida hacia Nqn / Cipo"}, {"idx": 16, "offset": 0, "label": "Llegada desde Nqn"}]
+    },
+    {
+        "key": "TREN_CONSTITUYENTES",
+        "nombreOficial": "Apeadero Constituyentes (Tren)",
+        "lat": -38.955020, "lon": -68.196900, "radio_mts": 40, "soloTren": True,
+        "cols50A": [], "cols50B": [], "cols50R": [],
+        "colsTREN": [{"idx": 1, "offset": 0, "label": "Hacia Neuquén / Cipo"}, {"idx": 15, "offset": 0, "label": "Hacia Plottier"}]
+    },
+    {
+        "key": "TREN_UNION",
+        "nombreOficial": "Apeadero Barrio Unión (Tren)",
+        "lat": -38.955150, "lon": -68.177750, "radio_mts": 40, "soloTren": True,
+        "cols50A": [], "cols50B": [], "cols50R": [],
+        "colsTREN": [{"idx": 2, "offset": 0, "label": "Hacia Neuquén / Cipo"}, {"idx": 14, "offset": 0, "label": "Hacia Plottier"}]
+    },
+    {
+        "key": "TREN_AEROPUERTO",
+        "nombreOficial": "Apeadero Aeropuerto (Tren)",
+        "lat": -38.956250, "lon": -68.159750, "radio_mts": 40, "soloTren": True,
+        "cols50A": [], "cols50B": [], "cols50R": [],
+        "colsTREN": [{"idx": 3, "offset": 0, "label": "Hacia Neuquén / Cipo"}, {"idx": 13, "offset": 0, "label": "Hacia Plottier"}]
+    },
+    {
+        "key": "TREN_CHOLAR",
+        "nombreOficial": "Apeadero El Cholar (Tren)",
+        "lat": -38.957150, "lon": -68.148150, "radio_mts": 40, "soloTren": True,
+        "cols50A": [], "cols50B": [], "cols50R": [],
+        "colsTREN": [{"idx": 4, "offset": 0, "label": "Hacia Neuquén / Cipo"}, {"idx": 12, "offset": 0, "label": "Hacia Plottier"}]
+    },
+    {
+        "key": "TREN_ETON",
+        "nombreOficial": "Apeadero ETON (Tren)",
+        "lat": -38.957350, "lon": -68.139800, "radio_mts": 40, "soloTren": True,
+        "cols50A": [], "cols50B": [], "cols50R": [],
+        "colsTREN": [{"idx": 5, "offset": 0, "label": "Hacia Neuquén / Cipo"}, {"idx": 11, "offset": 0, "label": "Hacia Plottier"}]
+    },
+    {
+        "key": "TREN_RIVAS",
+        "nombreOficial": "Apeadero Ignacio Rivas (Tren)",
+        "lat": -38.958550, "lon": -68.078950, "radio_mts": 40, "soloTren": True,
+        "cols50A": [], "cols50B": [], "cols50R": [],
+        "colsTREN": [{"idx": 6, "offset": 0, "label": "Hacia Neuquén / Cipo"}, {"idx": 10, "offset": 0, "label": "Hacia Plottier"}]
+    },
+    {
+        "key": "TREN_NEUQUEN",
+        "nombreOficial": "Estación Neuquén Central (Tren)",
+        "lat": -38.956300, "lon": -68.059100, "radio_mts": 40, "soloTren": True,
+        "cols50A": [], "cols50B": [], "cols50R": [],
+        "colsTREN": [{"idx": 7, "offset": 0, "label": "Arribo / Paso Hacia Cipo"}, {"idx": 9, "offset": 0, "label": "Salida Hacia Plottier"}]
+    },
+    {
+        "key": "TREN_CIPOLLETTI",
+        "nombreOficial": "Estación Cipolletti (Tren del Valle)",
+        "lat": -38.939200, "lon": -67.997500, "radio_mts": 40, "soloTren": True,
+        "cols50A": [], "cols50B": [], "cols50R": [],
+        "colsTREN": [{"idx": 8, "offset": 0, "label": "Cabecera Cipolletti"}]
     }
 ]
 
@@ -138,6 +245,10 @@ ORDEN_PARADAS = {
     "50R": {
         "HACIA_NEUQUEN": ["EL_MANGRULLO", "RUTA22_RIAVITZ", "RUTA22_ETOP", "RIO_COLORADO_IDA", "RUTA22_ETON", "PARQUE_CENTRAL_NQN"],
         "HACIA_PLOTTIER": ["PARQUE_CENTRAL_NQN", "RUTA22_ETON", "RIO_COLORADO_IDA", "RUTA22_ETOP", "RUTA22_RIAVITZ", "EL_MANGRULLO"]
+    },
+    "TREN": {
+        "HACIA_NEUQUEN": ["TREN_PLOTTIER", "TREN_CONSTITUYENTES", "TREN_UNION", "TREN_AEROPUERTO", "TREN_CHOLAR", "TREN_ETON", "TREN_RIVAS", "TREN_NEUQUEN", "TREN_CIPOLLETTI"],
+        "HACIA_PLOTTIER": ["TREN_CIPOLLETTI", "TREN_NEUQUEN", "TREN_RIVAS", "TREN_ETON", "TREN_CHOLAR", "TREN_AEROPUERTO", "TREN_UNION", "TREN_CONSTITUYENTES", "TREN_PLOTTIER"]
     },
     "URBANO": {
         "HACIA_NEUQUEN": ["LOTEO_SOCIAL", "SAN_MARTIN_TRABAJO", "CASA_CULTURA", "AMANCAY_MUTICIAS", "RUTA22_ETOP"],
@@ -172,27 +283,37 @@ def _fusionar_linea_en_grupo(grupo, id_p, lineas):
                     grupo["lineas"][lin_nom]["ids"].insert(0, id_p)
                 else:
                     grupo["lineas"][lin_nom]["ids"].append(id_p)
-                # Conservamos todos los IDs del nodo para que /api/parada evalúe ambas manos sin perder paradas
                 grupo["lineas"][lin_nom]["parada"] = ",".join(grupo["lineas"][lin_nom]["ids"])
     if id_p not in grupo["ids"]:
         grupo["ids"].append(id_p)
 
 def agrupar_paradas_inteligente(paradas_raw, radio_comun_mts=35):
     """
-    1) Crea primero las 11 Paradas Oficiales de Planilla absorbiendo todas las líneas cercanas
-       para que en puntos clave estén disponibles todas las líneas que pasan por allí.
-    2) Agrupa el resto de las paradas comunes cada 35 metros.
+    1) Crea primero las 11 Paradas Oficiales de Colectivos absorbiendo las líneas cercanas.
+    2) Incluye las 9 Estaciones del Tren del Valle como nodos ferroviarios independientes.
+    3) Agrupa el resto de las paradas comunes cada 35 metros.
     """
     grupos_oficiales = []
+    estaciones_tren = []
+
     for pc in PUNTOS_CONTROL_OFICIALES:
-        grupos_oficiales.append({
-            "ids": [],
-            "lat": pc["lat"],
-            "lon": pc["lon"],
-            "desc": pc["nombreOficial"],
-            "radio": pc.get("radio_mts", 140),
-            "lineas": {}
-        })
+        if pc.get("soloTren"):
+            estaciones_tren.append([
+                pc["key"],
+                pc["lat"],
+                pc["lon"],
+                pc["nombreOficial"],
+                {"TREN": {"cod": "TREN", "parada": pc["key"], "ids": [pc["key"]]}}
+            ])
+        else:
+            grupos_oficiales.append({
+                "ids": [],
+                "lat": pc["lat"],
+                "lon": pc["lon"],
+                "desc": pc["nombreOficial"],
+                "radio": pc.get("radio_mts", 140),
+                "lineas": {}
+            })
 
     restantes = []
     for p in paradas_raw:
@@ -221,10 +342,11 @@ def agrupar_paradas_inteligente(paradas_raw, radio_comun_mts=35):
             grupos_comunes.append(nuevo_g)
 
     todos = [g for g in grupos_oficiales if g["lineas"]] + grupos_comunes
-    return [
+    paradas_colectivo = [
         [" / ".join(g["ids"][:2]), g["lat"], g["lon"], g["desc"], g["lineas"]]
         for g in todos
     ]
+    return paradas_colectivo + estaciones_tren
 
 def sumar_minutos_str(hhmm, mins):
     partes = str(hhmm).split(":")
@@ -345,6 +467,25 @@ PLANILLAS_OFICIALES = {
         ) + [
             ["23:15","00:03","00:15","00:22","00:40","00:58","01:05","01:18","02:05"]
         ]
+    },
+    "TREN_HABIL": {
+        "nombre": "Tren del Valle (Lunes a Viernes)",
+        "columnas": [
+            "Plottier (Sal.)", "Constituyentes (Ida)", "B° Unión (Ida)", "Aeropuerto (Ida)",
+            "El Cholar (Ida)", "ETON (Ida)", "Ignacio Rivas (Ida)", "Neuquén (Ida)",
+            "Cipolletti",
+            "Neuquén (Vta)", "Ignacio Rivas (Vta)", "ETON (Vta)", "El Cholar (Vta)",
+            "Aeropuerto (Vta)", "B° Unión (Vta)", "Constituyentes (Vta)", "Plottier (Lleg.)"
+        ],
+        "filas": construir_filas(
+            [
+                # Primer servicio corto matutino Plottier <-> Barrio Unión
+                ["05:55","06:02","06:07","-","-","-","-","-","-","-","-","-","-","-","06:15","06:20","06:27"]
+            ],
+            ["06:35","07:50","09:25","11:10","12:55","14:40","16:25","18:10","19:55"],
+            [0, 7, 5, 6, 5, 4, 15, 10, 20, 22, 10, 15, 4, 5, 6, 5, 7],
+            ["21:20","21:27","21:32","21:38","21:43","21:47","22:02","22:12","22:32","-","-","-","-","-","-","-","-"]
+        )
     }
 }
 
@@ -352,7 +493,8 @@ def obtener_horarios_oficiales():
     return {
         "puntos_control": PUNTOS_CONTROL_OFICIALES,
         "orden_paradas": ORDEN_PARADAS,
-        "planillas": PLANILLAS_OFICIALES
+        "planillas": PLANILLAS_OFICIALES,
+        "traza_tren": TRAZA_TREN_GEO
     }
 
 HTML_COMPLETO = """
@@ -361,25 +503,25 @@ HTML_COMPLETO = """
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Transporte Plottier - Colectivos en Vivo</title>
+  <title>Transporte Plottier - Colectivos y Tren del Valle en Vivo</title>
 
   <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
   <link rel="icon" type="image/png" sizes="192x192" href="/logo.png">
   <link rel="shortcut icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/logo.png">
 
-  <meta name="description" content="Ubicación GPS en vivo y horarios oficiales de las líneas 50A, 50B, 50R, 51 Urbano y 52 en Plottier y Neuquén.">
+  <meta name="description" content="Ubicación GPS en vivo y horarios oficiales de las líneas 50A, 50B, 50R, 51 Urbano, 52 y Tren del Valle en Plottier, Neuquén y Cipolletti.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Transporte Plottier">
-  <meta property="og:title" content="Transporte Plottier - Colectivos en Vivo">
-  <meta property="og:description" content="Seguimiento GPS en tiempo real y planillas de horarios oficiales (50A, 50B, 50R, 51 Urbano y 52).">
+  <meta property="og:title" content="Transporte Plottier - Colectivos y Tren en Vivo">
+  <meta property="og:description" content="Seguimiento en tiempo real y planillas oficiales (50A, 50B, 50R, 51 Urbano, 52 y Tren del Valle).">
   <meta property="og:url" content="{{ base_url }}/">
   <meta property="og:image" content="{{ base_url }}/logo.png">
   <meta property="og:image:width" content="512">
   <meta property="og:image:height" content="512">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Transporte Plottier - Colectivos en Vivo">
-  <meta name="twitter:description" content="GPS en vivo y planillas oficiales de colectivos en Plottier y Neuquén.">
+  <meta name="twitter:title" content="Transporte Plottier - Colectivos y Tren en Vivo">
+  <meta name="twitter:description" content="GPS en vivo y planillas oficiales de colectivos y Tren del Valle en Plottier y Neuquén.">
   <meta name="twitter:image" content="{{ base_url }}/logo.png">
 
   <!-- Google tag (gtag.js) - Google Analytics -->
@@ -405,7 +547,7 @@ HTML_COMPLETO = """
     #map-container { position: relative; margin-bottom: 16px; border-radius: 14px; overflow: hidden; border: 1px solid #313244; box-shadow: 0 4px 20px rgba(0,0,0,0.35); }
     #map { height: 460px; width: 100%; background: #11111B; }
     .map-badge { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(24, 24, 37, 0.92); backdrop-filter: blur(6px); padding: 6px 12px; border-radius: 8px; font-size: 12px; color: #CDD6F4; border: 1px solid #313244; font-weight: 700; }
-    .map-controls { position: absolute; bottom: 10px; right: 10px; z-index: 1000; display: flex; gap: 6px; }
+    .map-controls { position: absolute; bottom: 10px; right: 10px; z-index: 1000; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
     .btn-map-control { background: rgba(24, 24, 37, 0.92); border: 1px solid #45475A; color: #CDD6F4; font-size: 11px; font-weight: 700; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
     
     .bar-fixed { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(24, 24, 37, 0.96); backdrop-filter: blur(10px); padding: 12px 16px; border-top: 1px solid #313244; display: flex; justify-content: space-between; align-items: center; z-index: 2000; }
@@ -418,10 +560,11 @@ HTML_COMPLETO = """
     .bus-marker-50r { background: #38243E; border: 2px solid #CBA6F7; color: #CBA6F7; }
     .bus-marker-urbano { background: #3E3724; border: 2px solid #F9E2AF; color: #F9E2AF; }
     .bus-marker-52 { background: #3E2824; border: 2px solid #FAB387; color: #FAB387; }
+    .bus-marker-tren { background: #112A38; border: 2px solid #89DCEB; color: #89DCEB; box-shadow: 0 2px 10px rgba(137, 220, 235, 0.4); }
 
     .bus-weak { border-style: dashed !important; border-color: #F9E2AF !important; animation: pulseWeak 1.6s infinite; }
     .bus-stalled { background: #3B1D26 !important; border-color: #F38BA8 !important; color: #F38BA8 !important; opacity: 0.88; }
-    .bus-cabecera { opacity: 0.72; border-style: dotted !important; }
+    .bus-cabecera { opacity: 0.78; border-style: dotted !important; }
 
     @keyframes pulseWeak {
       0%, 100% { opacity: 1; }
@@ -444,8 +587,24 @@ HTML_COMPLETO = """
       cursor: pointer;
     }
 
+    .stop-train-pin {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      background: #112A38;
+      border: 2px solid #89DCEB;
+      color: #89DCEB;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 7px rgba(0,0,0,0.8);
+      cursor: pointer;
+    }
+
     .stop-popup-title { font-size: 13px; font-weight: 800; color: #111; }
     .stop-popup-badge { display: inline-block; background: #e8f8f5; color: #117a65; border: 1px solid #a3e4d7; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 4px; margin-bottom: 4px; }
+    .stop-popup-badge-train { display: inline-block; background: #e8f4f8; color: #0e6287; border: 1px solid #94d2bd; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 4px; margin-bottom: 4px; }
     .stop-popup-desc { font-size: 11px; color: #555; margin-bottom: 6px; }
     .btn-query-stop { background: #1E1E2E; color: #CDD6F4; border: 1px solid #45475A; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; margin: 2px; }
     .btn-jump-sched { display: inline-block; margin-top: 5px; background: #25335A; color: #89B4FA; border: 1px solid #89B4FA; padding: 3px 8px; border-radius: 5px; font-size: 10.5px; font-weight: 800; cursor: pointer; width: 100%; text-align: center; }
@@ -571,16 +730,17 @@ HTML_COMPLETO = """
     table.sched-table th {
       background: #1E1E2E;
       color: #89B4FA;
-      padding: 8px 4px;
+      padding: 8px 5px;
       font-weight: 800;
       position: sticky;
       top: 0;
       z-index: 10;
       border-bottom: 1px solid #313244;
       font-size: 10.5px;
+      white-space: nowrap;
     }
     table.sched-table td {
-      padding: 6px 4px;
+      padding: 6px 5px;
       border-bottom: 1px solid #262738;
       white-space: nowrap;
     }
@@ -723,7 +883,7 @@ HTML_COMPLETO = """
       <img src="/logo.png" alt="Logo" class="brand-logo" onerror="this.style.display='none';">
       <div>
         <h1>Transporte Plottier</h1>
-        <p class="sub">GPS en vivo y planillas oficiales (50A, 50B, 50R, 51 Urbano y 52)</p>
+        <p class="sub">GPS en vivo y planillas oficiales (50A, 50B, 50R, 51 Urbano, 52 y Tren del Valle)</p>
       </div>
     </div>
     <span class="badge-beta">Versión Beta</span>
@@ -732,6 +892,7 @@ HTML_COMPLETO = """
   <div id="map-container">
     <div class="map-badge" id="bus-count">Sincronizando radar...</div>
     <div class="map-controls">
+      <button class="btn-map-control" onclick="mostrarRuta('TREN', 'HACIA_NEUQUEN')">🚆 Ver Vía del Tren</button>
       <button class="btn-map-control" id="btn-toggle-stops" onclick="toggleParadas()">📍 Ocultar Paradas</button>
       <button class="btn-map-control" id="btn-clear" onclick="limpiarRutas()" style="display:none;">✕ Quitar Recorrido</button>
     </div>
@@ -741,7 +902,7 @@ HTML_COMPLETO = """
   <!-- Desplegable de Planillas de Horarios Oficiales -->
   <section class="sched-card" id="sched-section">
     <div class="sched-header" onclick="togglePlanillas()">
-      <div class="sched-header-title" id="sched-title-text">📅 Horarios Oficiales Indalo (50A, 50B y 50R)</div>
+      <div class="sched-header-title" id="sched-title-text">📅 Horarios Oficiales Indalo y Tren del Valle</div>
       <button class="sched-header-btn" id="btn-sched-toggle">Ver Planilla ▾</button>
     </div>
     <div class="sched-content" id="sched-panel">
@@ -753,6 +914,7 @@ HTML_COMPLETO = """
         <button class="sched-tab" data-clave="50B_SAB" onclick="mostrarPlanilla('50B_SAB')">50B Sábado</button>
         <button class="sched-tab" data-clave="50B_DOM" onclick="mostrarPlanilla('50B_DOM')">50B Domingo</button>
         <button class="sched-tab" data-clave="50R_HABIL" onclick="mostrarPlanilla('50R_HABIL')">50R Hábil y Sáb</button>
+        <button class="sched-tab" data-clave="TREN_HABIL" onclick="mostrarPlanilla('TREN_HABIL')">🚆 Tren del Valle</button>
       </div>
       <div class="sched-legend" id="sched-legend-box">
         <div class="legend-items">
@@ -774,7 +936,7 @@ HTML_COMPLETO = """
       Surgió originalmente como una herramienta para mi familia ante la falta de una forma práctica de ver los colectivos y sus recorridos en tiempo real, y decidí abrirla a la comunidad. Cada quien es totalmente libre de usarla y compartirla con quien guste.
     </p>
     <div class="beta-notice">
-      ⚠ <strong>Aviso importante:</strong> La aplicación se encuentra en fase <strong>Beta y en constante desarrollo</strong>. Las ubicaciones en movimiento y los tiempos son estimaciones basadas en los reportes del sistema, por lo que pueden existir demoras o errores y los datos deben tomarse de forma orientativa.
+      ⚠ <strong>Aviso importante:</strong> La aplicación se encuentra en fase <strong>Beta y en constante desarrollo</strong>. Las ubicaciones en movimiento y los tiempos son estimaciones basadas en los reportes del sistema y cronogramas oficiales, por lo que pueden existir demoras o variaciones operativas.
     </div>
     <div class="author-row">
       <div class="author-info">
@@ -803,6 +965,9 @@ HTML_COMPLETO = """
   <script>
     let map, capaRuta, capaParadas;
     let busesSim = {};
+    let trenesSim = {};
+    let totalBusesRadar = 0;
+    let totalBusesEnVivo = 0;
     let RUTAS_GEO = {};
     let RUTAS_DENSAS = {};
     let PUNTOS_CONTROL_OFICIALES = [];
@@ -816,6 +981,15 @@ HTML_COMPLETO = """
     const LIMITE_DEBIL_SEG = 180;
     const LIMITE_AVERIA_SEG = 240;
     const DIST_MAX_EN_RUTA_MTS = 35;
+
+    // Correspondencia exacta entre las 17 columnas de TREN_HABIL y las claves de estaciones
+    const MAPA_COL_ESTACION_TREN = [
+      "TREN_PLOTTIER", "TREN_CONSTITUYENTES", "TREN_UNION", "TREN_AEROPUERTO",
+      "TREN_CHOLAR", "TREN_ETON", "TREN_RIVAS", "TREN_NEUQUEN",
+      "TREN_CIPOLLETTI",
+      "TREN_NEUQUEN", "TREN_RIVAS", "TREN_ETON", "TREN_CHOLAR",
+      "TREN_AEROPUERTO", "TREN_UNION", "TREN_CONSTITUYENTES", "TREN_PLOTTIER"
+    ];
 
     function sumarMinutos(hhmm, mins) {
       const partes = String(hhmm).split(':');
@@ -839,12 +1013,10 @@ HTML_COMPLETO = """
     }
 
     function calcularDiferenciaHorario(minPasoBase, minInicioFila, minActual) {
-      // Si la celda cruza la medianoche respecto del inicio de su propia fila, pertenece a la madrugada (+1440)
       const minPasoMonotono = (minPasoBase < minInicioFila && minInicioFila >= 1080)
         ? minPasoBase + 1440
         : minPasoBase;
 
-      // Si el reloj actual está en la madrugada (00:00 a 02:15), evaluamos también contra el cierre nocturno (+1440)
       if (minActual < 135 && minPasoMonotono >= 1440) {
         return minPasoMonotono - (minActual + 1440);
       }
@@ -855,17 +1027,18 @@ HTML_COMPLETO = """
       const ahora = new Date();
       const fmt = new Intl.DateTimeFormat('en-US', {
         timeZone: 'America/Argentina/Buenos_Aires',
-        hour: '2-digit', minute: '2-digit', weekday: 'short', hour12: false
+        hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short', hour12: false
       }).formatToParts(ahora);
-      let h = 0, m = 0, wd = 'Mon';
+      let h = 0, m = 0, s = 0, wd = 'Mon';
       for (const p of fmt) {
         if (p.type === 'hour') h = parseInt(p.value, 10) % 24;
         if (p.type === 'minute') m = parseInt(p.value, 10);
+        if (p.type === 'second') s = parseInt(p.value, 10);
         if (p.type === 'weekday') wd = p.value;
       }
       const minActual = h * 60 + m;
+      const minExacto = minActual + (s / 60.0);
 
-      // Entre las 00:00 y las 02:10 siguen circulando los últimos servicios del día operativo anterior
       let wdOperativo = wd;
       if (minActual < 130) {
         const mapaPrevio = { Mon: 'Sun', Tue: 'Mon', Wed: 'Tue', Thu: 'Wed', Fri: 'Thu', Sat: 'Fri', Sun: 'Sat' };
@@ -881,10 +1054,19 @@ HTML_COMPLETO = """
         sufijoDia = 'DOM';
         etiquetaDia = 'Domingo';
       }
-      return { minActual: minActual, sufijoDia: sufijoDia, etiquetaDia: etiquetaDia };
+
+      const sufijoCalendario = (wd === 'Sat') ? 'SAB' : ((wd === 'Sun') ? 'DOM' : 'HABIL');
+      return {
+        minActual: minActual,
+        minExacto: minExacto,
+        sufijoDia: sufijoDia,
+        sufijoCalendario: sufijoCalendario,
+        etiquetaDia: etiquetaDia
+      };
     }
 
     function resolverClavePlanilla(linNom, sufijoDia) {
+      if (linNom === "TREN") return "TREN_HABIL";
       if (linNom === "50R") return "50R_HABIL";
       const candidata = `${linNom}_${sufijoDia}`;
       return PLANILLAS_INDALO[candidata] ? candidata : `${linNom}_HABIL`;
@@ -907,7 +1089,7 @@ HTML_COMPLETO = """
     function limpiarResaltadoPlanilla() {
       puntoKeyResaltado = null;
       document.getElementById('sched-legend-box').style.display = 'none';
-      document.getElementById('sched-title-text').innerText = '📅 Horarios Oficiales Indalo (50A, 50B y 50R)';
+      document.getElementById('sched-title-text').innerText = '📅 Horarios Oficiales Indalo y Tren del Valle';
       mostrarPlanilla(clavePlanillaActual);
     }
 
@@ -916,6 +1098,7 @@ HTML_COMPLETO = """
       if (linNom === "50A") return punto.cols50A || [];
       if (linNom === "50B") return punto.cols50B || [];
       if (linNom === "50R") return punto.cols50R || [];
+      if (linNom === "TREN") return punto.colsTREN || [];
       return [];
     }
 
@@ -928,7 +1111,8 @@ HTML_COMPLETO = """
 
       let lin = lineaPreferida;
       if (!lin || obtenerColsPuntoSegunLinea(punto, lin).length === 0) {
-        if ((punto.cols50A || []).length > 0) lin = "50A";
+        if ((punto.colsTREN || []).length > 0) lin = "TREN";
+        else if ((punto.cols50A || []).length > 0) lin = "50A";
         else if ((punto.cols50B || []).length > 0) lin = "50B";
         else if ((punto.cols50R || []).length > 0) lin = "50R";
         else lin = "50A";
@@ -996,7 +1180,8 @@ HTML_COMPLETO = """
               const minPaso = hhmmAMinutos(hhmm);
               const dif = calcularDiferenciaHorario(minPaso, minInicioFila, infoTiempo.minActual);
 
-              if (dif >= 0 && dif <= 240) {
+              const maxVentana = linActual === "TREN" ? 720 : 240;
+              if (dif >= 0 && dif <= maxVentana) {
                 candidatos.push({ rIdx, dif, hhmm });
               }
             });
@@ -1009,7 +1194,8 @@ HTML_COMPLETO = """
               if (primeraFilaResaltada === -1) primeraFilaResaltada = item.rIdx;
 
               if (orden < 2) {
-                for (let nextCol = cIdx + 1; nextCol < data.columnas.length; nextCol++) {
+                const limiteCol = (linActual === "TREN" && cIdx <= 8) ? 9 : data.columnas.length;
+                for (let nextCol = cIdx + 1; nextCol < limiteCol; nextCol++) {
                   const valSig = data.filas[item.rIdx][nextCol];
                   if (valSig && valSig !== "-") {
                     celdasProximasParadas.add(`${item.rIdx}_${nextCol}`);
@@ -1020,11 +1206,11 @@ HTML_COMPLETO = """
           });
         } else {
           legendBox.style.display = 'none';
-          titleText.innerText = '📅 Horarios Oficiales Indalo (50A, 50B y 50R)';
+          titleText.innerText = '📅 Horarios Oficiales Indalo y Tren del Valle';
         }
       } else {
         legendBox.style.display = 'none';
-        titleText.innerText = '📅 Horarios Oficiales Indalo (50A, 50B y 50R)';
+        titleText.innerText = '📅 Horarios Oficiales Indalo y Tren del Valle';
       }
 
       let h = `<table class="sched-table"><thead><tr>`;
@@ -1079,7 +1265,7 @@ HTML_COMPLETO = """
     }
 
     function calcularHorariosPuntoOficial(puntoKey, linNom) {
-      if (linNom !== "50A" && linNom !== "50B" && linNom !== "50R") return null;
+      if (linNom !== "50A" && linNom !== "50B" && linNom !== "50R" && linNom !== "TREN") return null;
       const punto = PUNTOS_CONTROL_OFICIALES.find(p => p.key === puntoKey);
       if (!punto) return null;
 
@@ -1091,10 +1277,15 @@ HTML_COMPLETO = """
       const planilla = PLANILLAS_INDALO[clavePlan];
       if (!planilla) return null;
 
-      const etiquetaPlan = (linNom === "50R")
-        ? (infoTiempo.sufijoDia === "DOM" ? "Ref. Hábil/Sáb" : "Hábil / Sáb")
-        : infoTiempo.etiquetaDia;
+      const sinServicioHoy = (linNom === "TREN" && infoTiempo.sufijoCalendario !== "HABIL");
+      const etiquetaPlan = (linNom === "TREN")
+        ? "Lunes a Viernes"
+        : ((linNom === "50R")
+          ? (infoTiempo.sufijoDia === "DOM" ? "Ref. Hábil/Sáb" : "Hábil / Sáb")
+          : infoTiempo.etiquetaDia);
+
       const resultados = [];
+      const maxVentana = linNom === "TREN" ? 720 : 240;
 
       for (const cInfo of cols) {
         const offsetMin = cInfo.offset || 0;
@@ -1105,9 +1296,10 @@ HTML_COMPLETO = """
           const minInicioFila = obtenerMinutoInicioFila(fila);
           const hhmm = offsetMin !== 0 ? sumarMinutos(hhmmBase, offsetMin) : hhmmBase;
           const minPaso = hhmmAMinutos(hhmm);
-          const dif = calcularDiferenciaHorario(minPaso, minInicioFila, infoTiempo.minActual);
+          let dif = calcularDiferenciaHorario(minPaso, minInicioFila, infoTiempo.minActual);
+          if (linNom === "TREN" && dif < 0) dif += 1440;
 
-          if (dif >= 0 && dif <= 240) {
+          if (dif >= 0 && dif <= maxVentana) {
             proximos.push({ hora: hhmm, enMin: dif });
           }
         }
@@ -1120,7 +1312,7 @@ HTML_COMPLETO = """
           });
         }
       }
-      return { etiquetaDia: etiquetaPlan, bloques: resultados };
+      return { etiquetaDia: etiquetaPlan, sinServicioHoy: sinServicioHoy, bloques: resultados };
     }
 
     function armarHTMLHorarioProgramado(puntoKey, linNom, incluirBoton = false) {
@@ -1128,13 +1320,29 @@ HTML_COMPLETO = """
       if (!info || !info.bloques || info.bloques.length === 0) return '';
 
       let html = `<div style="margin-top:5px; padding-top:4px; border-top:1px dashed #bbb; font-size:11px; color:#222;">`;
+      if (info.sinServicioHoy) {
+        html += `<div style="color:#b7950b; font-weight:800; margin-bottom:4px;">⏸ Sin servicio hoy (opera lunes a viernes hábiles)</div>`;
+      }
       info.bloques.forEach(b => {
-        const textoEnCuanto = b.proximo.enMin === 0 ? "¡Pasa ahora!" : `Pasa en <strong>${b.proximo.enMin} min</strong>`;
+        let textoEnCuanto = "";
+        if (info.sinServicioHoy) {
+          textoEnCuanto = `Próximo hábil: <strong>${b.proximo.hora}</strong>`;
+        } else if (b.proximo.enMin === 0) {
+          textoEnCuanto = "¡En estación ahora!";
+        } else if (b.proximo.enMin > 90) {
+          const hs = Math.floor(b.proximo.enMin / 60);
+          const ms = b.proximo.enMin % 60;
+          textoEnCuanto = `Sale en <strong>${hs}h ${ms}m</strong> (${b.proximo.hora})`;
+        } else {
+          textoEnCuanto = `Pasa en <strong>${b.proximo.enMin} min</strong>`;
+        }
         const listaHoras = b.siguientes.map(x => `<strong>${x.hora}</strong>`).join(' · ');
+        const icono = linNom === "TREN" ? "🚆" : "⏱";
+        const nombreMostrado = linNom === "TREN" ? "Tren" : linNom;
         html += `
           <div style="margin-bottom:4px;">
-            ⏱ <strong>${linNom} (${b.sentidoLabel}):</strong> <span style="color:#117a65; font-weight:800;">${textoEnCuanto}</span><br>
-            <span style="color:#555; font-size:10.5px;">📅 Programado (${info.etiquetaDia}): ${listaHoras}</span>
+            ${icono} <strong>${nombreMostrado} (${b.sentidoLabel}):</strong> <span style="color:#0e6287; font-weight:800;">${textoEnCuanto}</span><br>
+            <span style="color:#555; font-size:10.5px;">📅 Horarios (${info.etiquetaDia}): ${listaHoras}</span>
           </div>
         `;
       });
@@ -1201,6 +1409,264 @@ HTML_COMPLETO = """
         }
       }
       return { index: minIdx, dist: minDist };
+    }
+
+    function interpolarSobreTraza(traza, latA, lonA, latB, lonB, frac) {
+      if (!traza || traza.length < 2) {
+        return [latA + (latB - latA) * frac, lonA + (lonB - lonA) * frac];
+      }
+      const posA = encontrarIndiceMasCercano(latA, lonA, traza);
+      const posB = encontrarIndiceMasCercano(latB, lonB, traza);
+      if (posB.index <= posA.index) {
+        return [latA + (latB - latA) * frac, lonA + (lonB - lonA) * frac];
+      }
+      const idxFloat = posA.index + (posB.index - posA.index) * Math.max(0, Math.min(1, frac));
+      const idxBase = Math.floor(idxFloat);
+      const idxSig = Math.min(posB.index, idxBase + 1);
+      const resto = idxFloat - idxBase;
+      const p1 = traza[idxBase], p2 = traza[idxSig];
+      return [p1[0] + (p2[0] - p1[0]) * resto, p1[1] + (p2[1] - p1[1]) * resto];
+    }
+
+    function actualizarEtiquetaSuperior(trenEnCirculacion = false) {
+      const label = document.getElementById('bus-count');
+      const txtTren = trenEnCirculacion ? " · 🚆 Tren en recorrido" : " · 🚆 Tren en cabecera";
+      if (totalBusesRadar > 0) {
+        label.innerText = `🚌 ${totalBusesEnVivo} colectivos activos (${totalBusesRadar} en radar)${txtTren}`;
+      } else {
+        label.innerText = `Buscando colectivos GPS...${txtTren}`;
+      }
+    }
+
+    function extraerTramoTren(fila, iniCol, finCol, sentidoCode, sentidoTexto) {
+      const paradas = [];
+      for (let c = iniCol; c <= finCol; c++) {
+        const val = fila[c];
+        if (!val || val === "-") continue;
+        const stKey = MAPA_COL_ESTACION_TREN[c];
+        const stObj = PUNTOS_CONTROL_OFICIALES.find(p => p.key === stKey);
+        if (!stObj) continue;
+        paradas.push({
+          col: c,
+          key: stKey,
+          nombre: stObj.nombreOficial,
+          lat: stObj.lat,
+          lon: stObj.lon,
+          hora: val,
+          min: hhmmAMinutos(val)
+        });
+      }
+      if (paradas.length < 2) return null;
+      return {
+        sentido_code: sentidoCode,
+        sentido: sentidoTexto,
+        paradas: paradas,
+        minSalida: paradas[0].min,
+        minLlegada: paradas[paradas.length - 1].min,
+        origen: paradas[0],
+        destino: paradas[paradas.length - 1]
+      };
+    }
+
+    function generarHTMLPopupTren(t) {
+      const colorSentido = t.sentido_code === 'HACIA_NEUQUEN' ? '#89DCEB' : '#A6E3A1';
+      let estadoHTML = '';
+      if (t.estado === 'EN_MOVIMIENTO') {
+        estadoHTML = `<div style="color:#117a65; font-weight:800; margin-top:4px;">🟢 En circulación por vía férrea</div>`;
+      } else if (t.estado === 'EN_ESTACION') {
+        estadoHTML = `<div style="color:#d35400; font-weight:800; margin-top:4px;">🚉 Detenido en ${t.estacionActual}</div>`;
+      } else {
+        estadoHTML = `<div style="color:#b7950b; font-weight:800; margin-top:4px;">⏸ En ${t.estacionActual}<br><span style="font-weight:normal; font-size:11px; color:#555;">${t.detalleCabecera}</span></div>`;
+      }
+
+      return `
+        <div style="font-family:sans-serif; font-size:12px; min-width:205px;">
+          <div class="stop-popup-badge-train">🚆 Servicio Ferroviario Oficial</div>
+          <div style="font-size:14px; font-weight:800; color:#111;">Tren del Valle</div>
+          <span style="color:${colorSentido}; background:#181825; padding:1px 6px; border-radius:4px; font-weight:800; font-size:11px; display:inline-block; margin-top:2px;">${t.sentido}</span>
+          ${estadoHTML}
+          <div style="margin-top:6px; padding-top:5px; border-top:1px solid #ddd; font-size:11.5px; color:#222;">
+            📍 <strong>Próxima Estación:</strong><br>
+            <span style="font-weight:800; color:#0e6287;">${t.proximaEstacion}</span><br>
+            ⏱ <strong>Llegada estimada:</strong> <span style="color:#117a65; font-weight:900;">${t.tiempoProximaTxt}</span> (${t.horaProxima})
+          </div>
+          <div style="margin-top:4px; font-size:10.5px; color:#555;">
+            🏁 Cabecera destino: <strong>${t.destinoNombre}</strong> (${t.horaDestino})
+          </div>
+          <button class="btn-jump-sched" onclick="desplegarPlanillaConZona('${t.proximaKey}', 'TREN'); irALaPlanillaAbajo();">📅 Ver horarios del Tren en planilla ▾</button>
+        </div>
+      `;
+    }
+
+    function actualizarTrenDelValleEnVivo() {
+      const planilla = PLANILLAS_INDALO["TREN_HABIL"];
+      if (!planilla || !planilla.filas) return;
+
+      const infoTiempo = obtenerMinutosActualesArgentina();
+      const minExacto = infoTiempo.minExacto;
+      const esDiaHabil = infoTiempo.sufijoCalendario === "HABIL";
+
+      const tramosActivos = [];
+
+      if (esDiaHabil) {
+        planilla.filas.forEach((fila, rIdx) => {
+          const tramoIda = extraerTramoTren(fila, 0, 8, "HACIA_NEUQUEN", "Hacia Neuquén / Cipolletti");
+          const tramoVta = extraerTramoTren(fila, 8, 16, "HACIA_PLOTTIER", "Hacia Plottier");
+
+          [tramoIda, tramoVta].forEach((tramo, idxDir) => {
+            if (!tramo) return;
+            // Activo desde 4 minutos antes de salir hasta 1 minuto después de llegar
+            if (minExacto >= tramo.minSalida - 4 && minExacto <= tramo.minLlegada + 1) {
+              const idTren = `TREN_${rIdx}_${idxDir}`;
+              const traza = (RUTAS_DENSAS["TREN"] && RUTAS_DENSAS["TREN"][tramo.sentido_code]) || [];
+
+              if (minExacto < tramo.minSalida) {
+                const segFaltan = Math.max(1, Math.ceil(tramo.minSalida - minExacto));
+                const prox = tramo.paradas[1];
+                const minAProx = Math.max(1, Math.round(prox.min - minExacto));
+                tramosActivos.push({
+                  id: idTren,
+                  lat: tramo.origen.lat,
+                  lon: tramo.origen.lon,
+                  sentido: tramo.sentido,
+                  sentido_code: tramo.sentido_code,
+                  estado: "CABECERA",
+                  estacionActual: tramo.origen.nombre,
+                  detalleCabecera: `Sale en ${segFaltan} min (${tramo.origen.hora})`,
+                  proximaEstacion: prox.nombre,
+                  proximaKey: prox.key,
+                  horaProxima: prox.hora,
+                  tiempoProximaTxt: `en ${minAProx} min`,
+                  destinoNombre: tramo.destino.nombre,
+                  horaDestino: tramo.destino.hora
+                });
+              } else {
+                let segIdx = tramo.paradas.length - 2;
+                for (let k = 0; k < tramo.paradas.length - 1; k++) {
+                  if (minExacto >= tramo.paradas[k].min && minExacto <= tramo.paradas[k + 1].min) {
+                    segIdx = k;
+                    break;
+                  }
+                }
+                const pA = tramo.paradas[segIdx];
+                const pB = tramo.paradas[segIdx + 1];
+                const duracionSeg = Math.max(1, pB.min - pA.min);
+                const transcurrido = Math.max(0, Math.min(duracionSeg, minExacto - pA.min));
+                const frac = transcurrido / duracionSeg;
+                const coords = interpolarSobreTraza(traza, pA.lat, pA.lon, pB.lat, pB.lon, frac);
+                const minRestantes = Math.max(0, pB.min - minExacto);
+                const enEstacion = transcurrido < 0.40;
+
+                tramosActivos.push({
+                  id: idTren,
+                  lat: coords[0],
+                  lon: coords[1],
+                  sentido: tramo.sentido,
+                  sentido_code: tramo.sentido_code,
+                  estado: enEstacion ? "EN_ESTACION" : "EN_MOVIMIENTO",
+                  estacionActual: pA.nombre,
+                  detalleCabecera: "",
+                  proximaEstacion: pB.nombre,
+                  proximaKey: pB.key,
+                  horaProxima: pB.hora,
+                  tiempoProximaTxt: minRestantes < 0.9 ? "Llegando (< 1 min)" : `en ${Math.ceil(minRestantes)} min`,
+                  destinoNombre: tramo.destino.nombre,
+                  horaDestino: tramo.destino.hora
+                });
+              }
+            }
+          });
+        });
+      }
+
+      const hayTrenCirculando = tramosActivos.length > 0;
+
+      // Si no hay tren circulando en este minuto, mostramos la formación en Estación Plottier con su próxima salida
+      if (!hayTrenCirculando) {
+        const estPlo = PUNTOS_CONTROL_OFICIALES.find(p => p.key === "TREN_PLOTTIER");
+        const estConst = PUNTOS_CONTROL_OFICIALES.find(p => p.key === "TREN_CONSTITUYENTES");
+        const infoProg = calcularHorariosPuntoOficial("TREN_PLOTTIER", "TREN");
+        const bloqueSalida = infoProg && infoProg.bloques ? infoProg.bloques[0] : null;
+        const horaSal = bloqueSalida ? bloqueSalida.proximo.hora : "05:55";
+        const minSal = bloqueSalida ? bloqueSalida.proximo.enMin : 0;
+
+        let detalleEspera = "Opera de lunes a viernes hábiles";
+        let txtProx = `Próx. salida ${horaSal}`;
+        if (esDiaHabil && minSal > 0) {
+          const hs = Math.floor(minSal / 60);
+          const ms = minSal % 60;
+          detalleEspera = hs > 0
+            ? `Próxima salida: ${horaSal} (en ${hs}h ${ms}m)`
+            : `Próxima salida: ${horaSal} (en ${ms} min)`;
+          txtProx = `a los 7 min de salir (${sumarMinutos(horaSal, 7)})`;
+        }
+
+        if (estPlo && estConst) {
+          tramosActivos.push({
+            id: "TREN_CABECERA_FIJA",
+            lat: estPlo.lat,
+            lon: estPlo.lon,
+            sentido: "Hacia Neuquén / Cipolletti",
+            sentido_code: "HACIA_NEUQUEN",
+            estado: "CABECERA",
+            estacionActual: estPlo.nombreOficial,
+            detalleCabecera: detalleEspera,
+            proximaEstacion: estConst.nombreOficial,
+            proximaKey: "TREN_CONSTITUYENTES",
+            horaProxima: sumarMinutos(horaSal, 7),
+            tiempoProximaTxt: txtProx,
+            destinoNombre: "Estación Neuquén / Cipolletti",
+            horaDestino: sumarMinutos(horaSal, 52)
+          });
+        }
+      }
+
+      const idsActivos = new Set();
+      tramosActivos.forEach(t => {
+        idsActivos.add(t.id);
+        const esCabecera = t.estado === "CABECERA";
+        const claseExtra = esCabecera ? "bus-cabecera" : "";
+        const iconoHtml = `<div class="bus-marker bus-marker-tren ${claseExtra}">🚆 TREN</div>`;
+        const iconObj = L.divIcon({
+          className: 'custom-icon-tren',
+          html: iconoHtml,
+          iconSize: [76, 24],
+          iconAnchor: [38, 12]
+        });
+
+        if (trenesSim[t.id]) {
+          const simT = trenesSim[t.id];
+          Object.assign(simT, t);
+          simT.marker.setLatLng([t.lat, t.lon]);
+          if (simT.ultimoEstado !== t.estado) {
+            simT.ultimoEstado = t.estado;
+            simT.marker.setIcon(iconObj);
+          }
+          if (simT.marker.isPopupOpen()) {
+            simT.marker.getPopup().setContent(generarHTMLPopupTren(simT));
+          }
+        } else {
+          const simT = { ...t, ultimoEstado: t.estado };
+          const m = L.marker([t.lat, t.lon], { icon: iconObj, zIndexOffset: 1100 });
+          m.bindPopup(() => generarHTMLPopupTren(simT));
+          m.on('popupopen', () => {
+            m.getPopup().setContent(generarHTMLPopupTren(simT));
+            mostrarRuta("TREN", simT.sentido_code);
+          });
+          m.addTo(map);
+          simT.marker = m;
+          trenesSim[t.id] = simT;
+        }
+      });
+
+      for (const id in trenesSim) {
+        if (!idsActivos.has(id)) {
+          map.removeLayer(trenesSim[id].marker);
+          delete trenesSim[id];
+        }
+      }
+
+      actualizarEtiquetaSuperior(hayTrenCirculando);
     }
 
     function estaEnRutaProgramada(lat, lon, linea, sentidoCode) {
@@ -1310,7 +1776,7 @@ HTML_COMPLETO = """
     }
 
     async function init() {
-      map = L.map('map', { zoomControl: false }).setView([-38.955, -68.18], 12);
+      map = L.map('map', { zoomControl: false }).setView([-38.955, -68.15], 12);
       L.control.zoom({ position: 'topright' }).addTo(map);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
 
@@ -1319,12 +1785,16 @@ HTML_COMPLETO = """
 
       const r = await fetch('/api/static_data');
       const staticData = await r.json();
-      RUTAS_GEO = staticData.trazas;
+      RUTAS_GEO = staticData.trazas || {};
 
       const horariosJson = staticData.horarios_oficiales || {};
       PUNTOS_CONTROL_OFICIALES = horariosJson.puntos_control || [];
       ORDEN_PARADAS_OFICIALES = horariosJson.orden_paradas || {};
       PLANILLAS_INDALO = horariosJson.planillas || {};
+
+      if (horariosJson.traza_tren) {
+        RUTAS_GEO["TREN"] = horariosJson.traza_tren;
+      }
 
       const infoHoy = obtenerMinutosActualesArgentina();
       clavePlanillaActual = resolverClavePlanilla("50A", infoHoy.sufijoDia);
@@ -1337,6 +1807,8 @@ HTML_COMPLETO = """
       }
 
       dibujarParadas(staticData.paradas);
+      actualizarTrenDelValleEnVivo();
+      setInterval(actualizarTrenDelValleEnVivo, 3000);
       pedirDatos();
       setInterval(pedirDatos, 9000);
       requestAnimationFrame(loopFisicoContinuo);
@@ -1349,10 +1821,15 @@ HTML_COMPLETO = """
       PUNTOS_CONTROL_OFICIALES.forEach(pc => {
         let mejorIdx = -1, menorD = 60;
         paradas.forEach((p, idx) => {
-          const d = distMts(pc.lat, pc.lon, p[1], p[2]);
-          if (d < menorD) {
-            menorD = d;
-            mejorIdx = idx;
+          const esParadaTren = Boolean(p[4] && p[4]["TREN"]);
+          if (pc.soloTren) {
+            if (p[0] === pc.key) mejorIdx = idx;
+          } else if (!esParadaTren) {
+            const d = distMts(pc.lat, pc.lon, p[1], p[2]);
+            if (d < menorD) {
+              menorD = d;
+              mejorIdx = idx;
+            }
           }
         });
         if (mejorIdx !== -1) {
@@ -1363,22 +1840,35 @@ HTML_COMPLETO = """
       paradas.forEach((p, idx) => {
         const id = p[0], lat = p[1], lon = p[2], desc = p[3], lineas = p[4];
         const puntoOficial = mapaDestacadas[idx] || null;
+        const esEstacionTren = Boolean(puntoOficial && puntoOficial.soloTren);
         const pKey = puntoOficial ? puntoOficial.key : "";
 
         const ordenBotones = ["50A", "50B", "50R", "URBANO", "52 CENTRO", "52 UNION"];
-        const clavesLineas = Object.keys(lineas).sort((a, b) => {
+        const clavesLineas = Object.keys(lineas).filter(k => k !== "TREN").sort((a, b) => {
           const ia = ordenBotones.indexOf(a), ib = ordenBotones.indexOf(b);
           return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
         });
 
         let botones = '';
-        for (const linNom of clavesLineas) {
-          const info = lineas[linNom];
-          botones += `<button class="btn-query-stop" onclick="consultarParada(this, '${info.parada}', '${info.cod}', '${linNom}', '${pKey}')">⏱ ${linNom}</button>`;
+        if (esEstacionTren) {
+          botones += `<button class="btn-query-stop" onclick="mostrarRuta('TREN', 'HACIA_NEUQUEN')">🛤️ Trazado Vía Férrea</button>`;
+        } else {
+          for (const linNom of clavesLineas) {
+            const info = lineas[linNom];
+            botones += `<button class="btn-query-stop" onclick="consultarParada(this, '${info.parada}', '${info.cod}', '${linNom}', '${pKey}')">⏱ ${linNom}</button>`;
+          }
         }
 
         let marker;
-        if (puntoOficial) {
+        if (esEstacionTren) {
+          const iconoTrenPin = L.divIcon({
+            className: 'custom-stop-train',
+            html: `<div class="stop-train-pin" title="${puntoOficial.nombreOficial}">🚆</div>`,
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+          });
+          marker = L.marker([lat, lon], { icon: iconoTrenPin, zIndexOffset: 950 });
+        } else if (puntoOficial) {
           const iconoDestacado = L.divIcon({
             className: 'custom-stop-featured',
             html: `<div class="stop-featured-pin" title="${puntoOficial.nombreOficial}">✓</div>`,
@@ -1392,11 +1882,15 @@ HTML_COMPLETO = """
           });
         }
 
-        const tituloPopup = puntoOficial ? `✅ ${puntoOficial.nombreOficial}` : `📍 ${desc}`;
-        const badgeOficial = puntoOficial ? `<div class="stop-popup-badge">✓ Parada Oficial de Planilla</div>` : '';
+        const tituloPopup = esEstacionTren
+          ? `🚆 ${puntoOficial.nombreOficial}`
+          : (puntoOficial ? `✅ ${puntoOficial.nombreOficial}` : `📍 ${desc}`);
+        const badgeOficial = esEstacionTren
+          ? `<div class="stop-popup-badge-train">🚆 Estación Oficial Tren del Valle</div>`
+          : (puntoOficial ? `<div class="stop-popup-badge">✓ Parada Oficial de Planilla</div>` : '');
 
         marker.bindPopup(`
-          <div class="stop-popup-wrap" style="min-width:195px;">
+          <div class="stop-popup-wrap" style="min-width:205px;">
             ${badgeOficial}
             <div class="stop-popup-title">${tituloPopup}</div>
             <div class="stop-popup-desc">Ref: ${id}</div>
@@ -1407,7 +1901,9 @@ HTML_COMPLETO = """
 
         if (puntoOficial) {
           marker.on('popupopen', (e) => {
-            const linInicial = lineas["50A"] ? "50A" : (lineas["50B"] ? "50B" : (lineas["50R"] ? "50R" : null));
+            const linInicial = esEstacionTren
+              ? "TREN"
+              : (lineas["50A"] ? "50A" : (lineas["50B"] ? "50B" : (lineas["50R"] ? "50R" : null)));
             desplegarPlanillaConZona(pKey, linInicial);
 
             const popupNode = e.popup.getElement();
@@ -1416,7 +1912,8 @@ HTML_COMPLETO = """
             if (!box) return;
 
             let resumenProg = '';
-            ["50A", "50B", "50R"].forEach(lNom => {
+            const listaEval = esEstacionTren ? ["TREN"] : ["50A", "50B", "50R"];
+            listaEval.forEach(lNom => {
               if (lineas[lNom] || obtenerColsPuntoSegunLinea(puntoOficial, lNom).length > 0) {
                 resumenProg += armarHTMLHorarioProgramado(pKey, lNom, false);
               }
@@ -1425,7 +1922,10 @@ HTML_COMPLETO = """
             if (resumenProg) {
               resumenProg += `<button class="btn-jump-sched" onclick="irALaPlanillaAbajo()">📅 Ver zona resaltada en planilla ▾</button>`;
               box.style.display = 'block';
-              box.innerHTML = `<div style="font-size:10.5px; color:#555; margin-bottom:2px;">Toque una línea arriba para buscar GPS en vivo:</div>` + resumenProg;
+              const encabezadoBox = esEstacionTren
+                ? `<div style="font-size:10.5px; color:#555; margin-bottom:2px;">Próximos servicios ferroviarios:</div>`
+                : `<div style="font-size:10.5px; color:#555; margin-bottom:2px;">Toque una línea arriba para buscar GPS en vivo:</div>`;
+              box.innerHTML = encabezadoBox + resumenProg;
             }
           });
         }
@@ -1438,7 +1938,7 @@ HTML_COMPLETO = """
       const wrap = btnEl ? btnEl.closest('.stop-popup-wrap') : null;
       const box = wrap ? wrap.querySelector('.result-box') : document.querySelector('.leaflet-popup-content .result-box');
 
-      if (puntoKey && (linNom === "50A" || linNom === "50B" || linNom === "50R")) {
+      if (puntoKey && (linNom === "50A" || linNom === "50B" || linNom === "50R" || linNom === "TREN")) {
         desplegarPlanillaConZona(puntoKey, linNom);
       }
 
@@ -1635,13 +2135,18 @@ HTML_COMPLETO = """
       capaRuta.clearLayers();
       if (!RUTAS_GEO[linea] || !RUTAS_GEO[linea][sentidoCode]) return;
 
-      let color = "#89B4FA";
-      if (linea === "50A") color = "#A6E3A1";
-      if (linea === "50R") color = "#CBA6F7";
-      if (linea === "URBANO") color = "#F9E2AF";
-      if (linea.includes("52")) color = "#FAB387";
-
-      capaRuta.addLayer(L.polyline(RUTAS_GEO[linea][sentidoCode], { color: color, weight: 5, opacity: 0.9 }));
+      if (linea === "TREN") {
+        // Doble traza estilo vía férrea (base oscura + riel discontinuo celeste)
+        capaRuta.addLayer(L.polyline(RUTAS_GEO["TREN"][sentidoCode], { color: "#112A38", weight: 7, opacity: 0.95 }));
+        capaRuta.addLayer(L.polyline(RUTAS_GEO["TREN"][sentidoCode], { color: "#89DCEB", weight: 3, opacity: 1.0, dashArray: "8, 6" }));
+      } else {
+        let color = "#89B4FA";
+        if (linea === "50A") color = "#A6E3A1";
+        if (linea === "50R") color = "#CBA6F7";
+        if (linea === "URBANO") color = "#F9E2AF";
+        if (linea.includes("52")) color = "#FAB387";
+        capaRuta.addLayer(L.polyline(RUTAS_GEO[linea][sentidoCode], { color: color, weight: 5, opacity: 0.9 }));
+      }
       document.getElementById('btn-clear').style.display = 'block';
     }
 
@@ -1673,11 +2178,9 @@ HTML_COMPLETO = """
     }
 
     function sincronizarBuses(buses) {
-      const label = document.getElementById('bus-count');
-      const enVivo = buses.filter(b => b.edad_senal <= LIMITE_AVERIA_SEG).length;
-      label.innerText = buses.length > 0
-        ? `🚌 ${enVivo} activos en recorrido (${buses.length} en radar)`
-        : "Buscando unidades en recorrido...";
+      totalBusesRadar = buses.length;
+      totalBusesEnVivo = buses.filter(b => b.edad_senal <= LIMITE_AVERIA_SEG).length;
+      actualizarTrenDelValleEnVivo();
 
       const idsActivos = new Set();
 
@@ -1710,7 +2213,6 @@ HTML_COMPLETO = """
             const infoSim = encontrarIndiceMasCercano(sim.simLat, sim.simLon, traza, sim.trazaIdx);
             const distSimAGps = distMts(sim.simLat, sim.simLon, b.lat, b.lon);
 
-            // Evita el salto hacia atrás ("rubber-banding") si el simulador solo se adelantó ligeramente (<90m)
             if (!cambioSentido && infoSim.index >= infoGps.index && distSimAGps < 90) {
               sim.vel_kmh = Math.max(16, (b.vel_kmh || 28) * 0.75);
             } else {
