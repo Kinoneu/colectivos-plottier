@@ -15,15 +15,12 @@ CABECERAS_GEO = [
     (-38.941903, -67.996640, "Estación Cipolletti (Tren)")
 ]
 
+# Paradas terminales y nodos de bucle que capturan el 100% de la flota en ambos sentidos
 PARADAS_RADAR = [
+    ("NV 2574", "1013", "50A"),
     ("NV4120", "1013", "50A"),
-    ("NV1012", "1013", "50A"),
-    ("NV8039", "1013", "50A"),
-    ("NV1027", "1013", "50A"),
+    ("NV 2574", "1014", "50B"),
     ("NV4120", "1014", "50B"),
-    ("NV1012", "1014", "50B"),
-    ("NV1173", "1014", "50B"),
-    ("NV1027", "1014", "50B"),
     ("NV 4998", "1015", "50R"),
     ("NV6001", "1015", "50R"),
     ("NV5019", "1015", "50R"),
