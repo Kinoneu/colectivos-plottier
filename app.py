@@ -50,10 +50,6 @@ def distancia_km(lat1, lon1, lat2, lon2):
     return math.sqrt(((lat1 - lat2) * 111.0) ** 2 + ((lon1 - lon2) * 111.0 * 0.777) ** 2)
 
 def densificar_traza_con_distancia(puntos, paso_km=0.020):
-    """
-    Subdivide la polilínea cada 20 metros y guarda en cada punto [lat, lon, km_acumulados]
-    para medir la distancia real exacta siguiendo las calles del recorrido.
-    """
     if not puntos or len(puntos) < 2:
         return []
     acum_km = 0.0
@@ -116,13 +112,7 @@ def extraer_minutos(tiempo_str):
     m = re.search(r'(\d+)', str(tiempo_str or ""))
     return int(m.group(1)) if m else 999
 
-def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=42):
-    """
-    Filtra los arribos devueltos por una parada testigo:
-    1) Descarta predicciones a futuro (> 42 min) que corresponden a la vuelta siguiente
-       después de cambiar de cabecera (evita que un colectivo VUELTA se etiquete como IDA).
-    2) Si la misma unidad aparece dos veces en una parada compartida, conserva solo el menor tiempo.
-    """
+def filtrar_arribos_viaje_actual(arribos, max_minutos=42):
     validos = []
     for a in arribos:
         min_eta = extraer_minutos(a.get("tiempo") or a.get("tiempo_arribo"))
@@ -139,7 +129,7 @@ def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=42):
         if not lat or not lon:
             continue
         if not any(distancia_km(lat, lon, float(u["lat"]), float(u["lon"])) < 0.05 for u in unicos):
-            unicos.append({**a, "linea": linea})
+            unicos.append(a)
     return unicos
 
 def deducir_sentido_bandera(ramal_raw):
@@ -167,10 +157,6 @@ def indice_mas_cercano(lat, lon, traza):
     return mejor_idx, menor_d
 
 def encontrar_indice_parada_adelante(coords_parada, traza, idx_bus):
-    """
-    Encuentra el punto exacto de la traza (por delante del colectivo) que pasa por la parada.
-    Exige que la calle del recorrido pase a menos de 65 metros de la parada.
-    """
     mejor_idx_stop, menor_d_stop = -1, 999.0
     for (plat, plon) in coords_parada:
         umbral_km = 0.22 if plon > -68.088 else 0.065
@@ -183,14 +169,9 @@ def encontrar_indice_parada_adelante(coords_parada, traza, idx_bus):
     return mejor_idx_stop, menor_d_stop
 
 def formatear_rango_arribo(dist_recorrido_km, lon_bus=-68.18):
-    """
-    Calcula un rango estimado corto y preciso (de 3 a 4 minutos de ventana, ej. 'Entre 5 y 8 min')
-    diferenciando la velocidad en tramos de Ruta 22 / Autovía respecto de calles internas.
-    """
     if dist_recorrido_km <= 0.18:
         return "Llegando (< 1 min)", 0
 
-    # Velocidad comercial promedio: ~26.5 km/h en corredor Ruta 22 y ~22.5 km/h en casco urbano
     vel_comercial = 26.5 if -68.215 <= lon_bus <= -68.095 else 23.0
     min_base = max(1, int(round((dist_recorrido_km / vel_comercial) * 60)))
 
@@ -212,7 +193,10 @@ def procesar_nuevas_posiciones(detecciones):
             continue
 
         min_eta = int(d.get("_min_eta") or extraer_minutos(d.get("tiempo") or d.get("tiempo_arribo")))
-        sentido_bandera, code_bandera = deducir_sentido_bandera(d.get("ramal"))
+        
+        # Leemos el ramal directo que viene del Worker y enderezamos el sentido forzado que trae
+        ramal_raw = d.get("ramal") or f"Línea {linea}"
+        sentido_bandera, code_bandera = deducir_sentido_bandera(ramal_raw)
         sentido_geo, code_geo, d_nqn, d_plo = deducir_sentido_geometria(linea, lat, lon)
 
         bus_match_id, min_dist = None, 1.8
@@ -228,14 +212,11 @@ def procesar_nuevas_posiciones(detecciones):
             delta_lon = lon - bus["lon"]
             dt = max(ahora - bus["last_gps_at"], 1.0)
 
-            # 1. En sectores donde las trazas de IDA y VUELTA van por distintas calles, manda la calle
             if abs(d_nqn - d_plo) > 0.08:
                 sentido, sentido_code = sentido_geo, code_geo
-            # 2. Si el GPS avanzó físicamente más de 30m en sentido Este/Oeste, manda el desplazamiento real
             elif abs(delta_lon) > 0.00035:
                 sentido = "Hacia Plottier" if delta_lon < 0 else "Hacia Neuquén"
                 sentido_code = "HACIA_PLOTTIER" if delta_lon < 0 else "HACIA_NEUQUEN"
-            # 3. Si reporta bandera, solo cambiar el sentido si el nuevo reporte tiene un ETA menor (viaje actual)
             elif sentido_bandera:
                 eta_previa = bus.get("min_eta_radar", 999)
                 edad_eta_previa = ahora - bus.get("eta_radar_at", 0)
@@ -258,11 +239,11 @@ def procesar_nuevas_posiciones(detecciones):
             elif ahora - bus["last_gps_at"] < 120:
                 bus["last_gps_at"] = max(bus["last_gps_at"], ahora - 25)
 
-            ramal_actual = str(d.get("ramal") or bus.get("ramal") or f"Línea {linea}")
+            ramal_actual = ramal_raw
             if sentido_code == "HACIA_PLOTTIER" and "IDA" in ramal_actual.upper():
-                ramal_actual = ramal_actual.replace("IDA", "VUELTA")
+                ramal_actual = ramal_actual.replace("IDA", "VUELTA").replace("Ida", "Vuelta")
             elif sentido_code == "HACIA_NEUQUEN" and "VUELTA" in ramal_actual.upper():
-                ramal_actual = ramal_actual.replace("VUELTA", "IDA")
+                ramal_actual = ramal_actual.replace("VUELTA", "IDA").replace("Vuelta", "Ida")
 
             bus.update({"ramal": ramal_actual, "sentido": sentido, "sentido_code": sentido_code, "cabecera": detectar_cabecera(lat, lon), "updated_at": ahora})
         else:
@@ -275,11 +256,11 @@ def procesar_nuevas_posiciones(detecciones):
             else:
                 sentido, sentido_code = sentido_geo or "Hacia Plottier", code_geo or "HACIA_PLOTTIER"
 
-            ramal_inicial = str(d.get("ramal") or f"Línea {linea}")
+            ramal_inicial = ramal_raw
             if sentido_code == "HACIA_PLOTTIER" and "IDA" in ramal_inicial.upper():
-                ramal_inicial = ramal_inicial.replace("IDA", "VUELTA")
+                ramal_inicial = ramal_inicial.replace("IDA", "VUELTA").replace("Ida", "Vuelta")
             elif sentido_code == "HACIA_NEUQUEN" and "VUELTA" in ramal_inicial.upper():
-                ramal_inicial = ramal_inicial.replace("VUELTA", "IDA")
+                ramal_inicial = ramal_inicial.replace("VUELTA", "IDA").replace("Vuelta", "Ida")
 
             ESTADO_GLOBAL["buses"][nuevo_id] = {
                 "id": nuevo_id, "linea": linea, "ramal": ramal_inicial,
@@ -291,24 +272,23 @@ def procesar_nuevas_posiciones(detecciones):
 
     ESTADO_GLOBAL["buses"] = {k: v for k, v in ESTADO_GLOBAL["buses"].items() if ahora - v["last_gps_at"] < 480}
 
-def ejecutar_paso_radar(cantidad_paradas=6):
+def ejecutar_paso_radar():
     if not RADAR_LOCK.acquire(blocking=False):
         return
     try:
         ESTADO_GLOBAL["ultimo_escaneo"] = time.time()
-        paradas_radar = MOD_PARADAS.PARADAS_RADAR
-        idx = ESTADO_GLOBAL["idx_radar"]
-        lote = [paradas_radar[(idx + i) % len(paradas_radar)] for i in range(cantidad_paradas)]
-        ESTADO_GLOBAL["idx_radar"] = (idx + cantidad_paradas) % len(paradas_radar)
-
-        for p_id, p_cod, p_lin in lote:
-            try:
-                rp = requests.get(f"{URL_WORKER}parada", params={"id": p_id, "cod": p_cod, "linea": p_lin}, timeout=6)
-                if rp.status_code == 200:
-                    arribos_actuales = filtrar_arribos_viaje_actual(rp.json().get("arribos", []), p_lin, max_minutos=42)
-                    procesar_nuevas_posiciones(arribos_actuales)
-            except Exception:
-                pass
+        try:
+            # Se elevó el timeout a 35s porque el nuevo Worker escanea las 8 paradas internamente con demoras
+            r = requests.get(URL_WORKER, timeout=35)
+            if r.status_code == 200:
+                buses_list = r.json().get("buses", [])
+                for b in buses_list:
+                    if "tiempo_arribo" in b and "tiempo" not in b:
+                        b["tiempo"] = b["tiempo_arribo"]
+                arribos_actuales = filtrar_arribos_viaje_actual(buses_list, max_minutos=45)
+                procesar_nuevas_posiciones(arribos_actuales)
+        except Exception:
+            pass
 
         try:
             ESTADO_GLOBAL["timestamp"] = datetime.now(zoneinfo.ZoneInfo("America/Argentina/Buenos_Aires")).strftime("%H:%M:%S")
@@ -319,8 +299,9 @@ def ejecutar_paso_radar(cantidad_paradas=6):
 
 def recolector_fondo():
     while True:
-        ejecutar_paso_radar(6)
-        time.sleep(8)
+        ejecutar_paso_radar()
+        # Escaneamos cada 12 segundos para alinear con la memoria caché interna de tu Worker
+        time.sleep(12)
 
 Thread(target=recolector_fondo, daemon=True).start()
 
@@ -329,7 +310,7 @@ Thread(target=recolector_fondo, daemon=True).start()
 @app.route('/ping')
 def ruta_cron_ok():
     if time.time() - ESTADO_GLOBAL.get("ultimo_escaneo", 0) > 4:
-        Thread(target=ejecutar_paso_radar, args=(8,), daemon=True).start()
+        Thread(target=ejecutar_paso_radar, daemon=True).start()
     return Response("<!DOCTYPE html><html><body style='background:#fff;color:#000;'>ok</body></html>", status=200, mimetype='text/html')
 
 @app.route('/logo.png')
@@ -351,6 +332,10 @@ def foto_perfil():
 
 @app.route('/api/parada')
 def api_parada():
+    """
+    Solución 1: Zero llamadas al exterior.
+    Mide los kilómetros sobre la calle desde el bus hasta la parada y da un rango de llegada exacto.
+    """
     p_id_raw = request.args.get("id", "")
     p_linea = normalizar_linea(request.args.get("linea", ""))
     if not p_id_raw or not p_linea:
