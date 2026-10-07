@@ -4,7 +4,8 @@ import sys
 import time
 import json
 import math
-import requests
+import asyncio
+import aiohttp
 import importlib.util
 from datetime import datetime
 import zoneinfo
@@ -19,7 +20,7 @@ BROWSER_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
 )
 
-# Carga de catálogos y planillas priorizando la carpeta 'paradas-horarios'
+# Carga de catálogos y planillas
 def cargar_modulo_paradas():
     ruta_pref = os.path.join(BASE_DIR, "paradas-horarios", "paradas_horarios.py")
     if os.path.isfile(ruta_pref):
@@ -103,13 +104,6 @@ PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 
 URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
 
-# Sesión exclusiva para consultar al Worker (envía UA para evitar bloqueo interno)
-WORKER_SESSION = requests.Session()
-WORKER_SESSION.headers.update({
-    "User-Agent": BROWSER_UA,
-    "Accept": "application/json"
-})
-
 ESTADO_GLOBAL = {
     "timestamp": "--:--:--",
     "buses": {},
@@ -120,7 +114,6 @@ ESTADO_GLOBAL = {
 }
 RADAR_LOCK = Lock()
 
-# Paradas terminales que agrupan a todos los colectivos activos
 PARADAS_RADAR_DIRECTO = [
     ("NV 2574", "1013", "50A"),
     ("NV4120", "1013", "50A"),
@@ -136,29 +129,24 @@ PARADAS_RADAR_DIRECTO = [
     ("5200047", "1080", "52 UNION")
 ]
 
-def consultar_worker(p_id, p_cod, p_lin):
+async def fetch_parada_async(session, p_id, p_cod, p_lin):
     """
-    Delega 100% de la carga al Worker de Cloudflare, que elude los bloqueos de Indalo.
+    Consulta asíncrona al Worker de Cloudflare con timeout y evasión de bloqueos.
     """
     try:
-        rp = WORKER_SESSION.get(
+        async with session.get(
             f"{URL_WORKER}parada",
             params={"id": p_id, "cod": p_cod, "linea": p_lin},
-            timeout=8
-        )
-        if rp.status_code == 200:
-            payload = rp.json()
-            if payload.get("ok"):
-                arribos = payload.get("arribos") or []
-                ESTADO_GLOBAL["ultimo_diag"] = f"Worker OK: {p_lin} en {p_id} ({len(arribos)} uni)"
-                return arribos
-            else:
-                ESTADO_GLOBAL["ultimo_diag"] = f"Worker err lógico: {payload.get('error')}"
-        else:
-            ESTADO_GLOBAL["ultimo_diag"] = f"Worker bloqueado: HTTP {rp.status_code}"
-    except Exception as e:
-        ESTADO_GLOBAL["ultimo_diag"] = f"Worker Timeout/Exc: {str(e)[:40]}"
-    return []
+            timeout=4
+        ) as response:
+            if response.status == 200:
+                payload = await response.json()
+                if payload.get("ok"):
+                    arribos = payload.get("arribos") or []
+                    return p_lin, arribos
+    except Exception:
+        pass
+    return p_lin, []
 
 def detectar_cabecera(lat, lon):
     for c_lat, c_lon, c_nom in MOD_PARADAS.CABECERAS_GEO:
@@ -452,7 +440,11 @@ def procesar_nuevas_posiciones(detecciones):
             buses_limpios[k] = v
     ESTADO_GLOBAL["buses"] = buses_limpios
 
-def ejecutar_paso_radar(cantidad_paradas=6):
+async def escanear_radar_async(cantidad_paradas=6):
+    """
+    Motor asíncrono para consultar a Cloudflare.
+    Se ejecuta en background sin congelar el servidor Gunicorn.
+    """
     if not RADAR_LOCK.acquire(blocking=False):
         return
     try:
@@ -462,15 +454,23 @@ def ejecutar_paso_radar(cantidad_paradas=6):
         ESTADO_GLOBAL["idx_radar"] = (idx + cantidad_paradas) % len(PARADAS_RADAR_DIRECTO)
 
         acumulado_por_linea = {}
-        for p_id, p_cod, p_lin in lote:
-            arribos_raw = consultar_worker(p_id, p_cod, p_lin)
+        async with aiohttp.ClientSession(headers={"User-Agent": BROWSER_UA}) as session:
+            tareas = [fetch_parada_async(session, p_id, p_cod, p_lin) for p_id, p_cod, p_lin in lote]
+            resultados = await asyncio.gather(*tareas)
+
+        total_descargas = 0
+        for p_lin, arribos_raw in resultados:
             if arribos_raw:
                 acumulado_por_linea.setdefault(p_lin, []).extend(arribos_raw)
-            time.sleep(0.15)
+                total_descargas += len(arribos_raw)
 
-        for lin, lista_raw in acumulado_por_linea.items():
-            arribos_unicos = filtrar_arribos_viaje_actual(lista_raw, lin, max_minutos=150)
-            procesar_nuevas_posiciones(arribos_unicos)
+        if total_descargas > 0:
+            ESTADO_GLOBAL["ultimo_diag"] = f"Worker OK: {total_descargas} arribos procesados"
+            for lin, lista_raw in acumulado_por_linea.items():
+                arribos_unicos = filtrar_arribos_viaje_actual(lista_raw, lin, max_minutos=150)
+                procesar_nuevas_posiciones(arribos_unicos)
+        else:
+            ESTADO_GLOBAL["ultimo_diag"] = "Worker sin unidades detectadas en este barrido"
 
         try:
             ESTADO_GLOBAL["timestamp"] = datetime.now(
@@ -481,11 +481,16 @@ def ejecutar_paso_radar(cantidad_paradas=6):
     finally:
         RADAR_LOCK.release()
 
+def puente_asincrono(cantidad_paradas):
+    """ Función puente para ejecutar la corrutina asyncio dentro del hilo secundario """
+    asyncio.run(escanear_radar_async(cantidad_paradas))
+
 def recolector_fondo():
-    ejecutar_paso_radar(len(PARADAS_RADAR_DIRECTO))
+    # Primer barrido completo rápido (todas las cabeceras) de forma asíncrona
+    puente_asincrono(len(PARADAS_RADAR_DIRECTO))
     while True:
         time.sleep(6)
-        ejecutar_paso_radar(6)
+        puente_asincrono(6)
 
 Thread(target=recolector_fondo, daemon=True).start()
 
@@ -494,7 +499,7 @@ Thread(target=recolector_fondo, daemon=True).start()
 @app.route('/ping')
 def ruta_cron_ok():
     if time.time() - ESTADO_GLOBAL.get("ultimo_escaneo", 0) > 4:
-        Thread(target=ejecutar_paso_radar, args=(6,), daemon=True).start()
+        Thread(target=puente_asincrono, args=(6,), daemon=True).start()
     return Response("<!DOCTYPE html><html><body style='background:#fff;color:#000;'>ok</body></html>", status=200, mimetype='text/html')
 
 @app.route('/logo.png')
@@ -518,28 +523,12 @@ def foto_perfil():
 def api_parada():
     p_id_raw = request.args.get("id", "")
     p_linea = normalizar_linea(request.args.get("linea", ""))
-    p_cod = request.args.get("cod", "") or CODIGO_POR_LINEA.get(p_linea, "1013")
     if not p_id_raw or not p_linea:
         return jsonify({"arribos": []})
 
     ids_consulta = [x.strip() for x in re.split(r'[,/]', p_id_raw) if x.strip()]
     coords_parada = [MAPA_COORDS_PARADAS[pid] for pid in ids_consulta if pid in MAPA_COORDS_PARADAS]
-
     ahora = time.time()
-    buses_linea = [
-        b for b in ESTADO_GLOBAL["buses"].values()
-        if b["linea"] == p_linea and (ahora - b["last_gps_at"]) <= 240
-    ]
-
-    # Si no hay unidades activas, fuerza la consulta en el acto vía Worker
-    if not buses_linea and ids_consulta:
-        for pid_unico in ids_consulta[:2]:
-            nuevos = consultar_worker(pid_unico, p_cod, p_linea)
-            if nuevos:
-                filtrados = filtrar_arribos_viaje_actual(nuevos, p_linea, max_minutos=150)
-                procesar_nuevas_posiciones(filtrados)
-                break
-        ahora = time.time()
 
     if not coords_parada:
         return jsonify({"arribos": []})
@@ -585,10 +574,11 @@ def api_parada():
 @app.route('/api/radar')
 def api_radar():
     ahora = time.time()
+    # Evasión de suspensión en Render: Reactivación en demanda mediante threading
     if not ESTADO_GLOBAL["buses"] and (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 2:
-        ejecutar_paso_radar(len(PARADAS_RADAR_DIRECTO))
+        Thread(target=puente_asincrono, args=(len(PARADAS_RADAR_DIRECTO),), daemon=True).start()
     elif (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 7:
-        Thread(target=ejecutar_paso_radar, args=(6,), daemon=True).start()
+        Thread(target=puente_asincrono, args=(6,), daemon=True).start()
 
     ahora = time.time()
     lista = [
@@ -599,13 +589,9 @@ def api_radar():
 
 @app.route('/api/debug_radar')
 def api_debug_radar():
-    prueba = consultar_worker("NV 2574", "1013", "50A")
-    if prueba:
-        procesar_nuevas_posiciones(filtrar_arribos_viaje_actual(prueba, "50A", max_minutos=150))
     return jsonify({
         "timestamp": ESTADO_GLOBAL["timestamp"],
         "ultimo_diag": ESTADO_GLOBAL.get("ultimo_diag"),
-        "arribos_crudos_nv2574": len(prueba),
         "total_buses_en_memoria": len(ESTADO_GLOBAL["buses"]),
         "buses": list(ESTADO_GLOBAL["buses"].values())
     })
