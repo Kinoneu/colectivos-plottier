@@ -141,8 +141,8 @@ async def fetch_parada_async(session, p_id, p_cod, p_lin):
         ) as response:
             if response.status == 200:
                 payload = await response.json()
-                if payload.get("ok"):
-                    arribos = payload.get("arribos") or []
+                if "arribos" in payload:
+                  arribos = payload.get("arribos") or []
                     return p_lin, arribos
     except Exception:
         pass
@@ -570,6 +570,30 @@ def api_parada():
 
     arribos_calculados.sort(key=lambda x: x["_min"])
     return jsonify({"arribos": arribos_calculados[:4]})
+    
+@app.route('/api/aportar', methods=['POST'])
+def api_aportar():
+    data = request.get_json(silent=True) or {}
+    linea = data.get("linea", "")
+    parada_key = data.get("parada_key", "")
+    arribos = data.get("arribos", [])
+
+    if not isinstance(arribos, list) or not linea:
+        return jsonify({"ok": False})
+
+    for a in arribos:
+        sent_real, _ = deducir_sentido_bandera(a.get("ramal"), linea)
+        if sent_real:
+            a["sentido"] = sent_real
+
+    if arribos:
+        ESTADO_GLOBAL["ultimo_aporte_usuario"] = time.time()
+        arribos_unicos = filtrar_arribos_viaje_actual(arribos, linea)
+        procesar_nuevas_posiciones(arribos_unicos)
+        if parada_key:
+            CACHE_PARADAS[parada_key] = (time.time(), arribos_unicos)
+
+    return jsonify({"ok": True, "total_buses": len(ESTADO_GLOBAL["buses"])})
 
 @app.route('/api/radar')
 def api_radar():
