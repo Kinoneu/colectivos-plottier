@@ -3,18 +3,33 @@ import json
 import time
 import requests
 import math
+import re
 from threading import Thread
 from flask import Flask, jsonify, render_template_string
 
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1. Cargar bases de datos estáticas
-with open(os.path.join(BASE_DIR, "paradas_optimizadas.json"), "r", encoding="utf-8") as f:
-    PARADAS_RAW = json.load(f)
+# 1. Función para buscar archivos automáticamente en cualquier subcarpeta (Anti-crasheo)
+def find_file(filename):
+    for root, dirs, files in os.walk(BASE_DIR):
+        if filename in files:
+            return os.path.join(root, filename)
+    return None
 
-with open(os.path.join(BASE_DIR, "urbano y r.json"), "r", encoding="utf-8") as f:
-    raw_recorridos = json.load(f)["DBCuandoLlega"]["recorridos"]
+ruta_paradas = find_file("paradas_optimizadas.json")
+if ruta_paradas:
+    with open(ruta_paradas, "r", encoding="utf-8") as f:
+        PARADAS_RAW = json.load(f)
+else:
+    PARADAS_RAW = []
+
+ruta_recorridos = find_file("urbano y r.json")
+if ruta_recorridos:
+    with open(ruta_recorridos, "r", encoding="utf-8") as f:
+        raw_recorridos = json.load(f).get("DBCuandoLlega", {}).get("recorridos", [])
+else:
+    raw_recorridos = []
 
 MAPA_LINEAS = {
     "1013": "50A", "1014": "50B", "1015": "50R", 
@@ -32,11 +47,59 @@ for rec in raw_recorridos:
         for p in rec.get("puntos", []) if p.get("latitud") and p.get("longitud")
     ]
 
-# 2. Motor de Radar Base
-URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
-ESTADO_GLOBAL = {"buses": {}, "contador": 1}
+# 2. MOTOR DIRECTO A INDALO (Sin usar Cloudflare Worker)
+class IndaloScraper:
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "*/*",
+            "Origin": "https://cuandollega.smartmovepro.net",
+            "Referer": "https://cuandollega.smartmovepro.net/indalo/recorridos",
+            "X-Requested-With": "XMLHttpRequest"
+        })
+        self.token = None
 
-# Paradas estratégicas para encontrar todas las unidades
+    def renovar_sesion(self):
+        try:
+            r = self.session.get("https://cuandollega.smartmovepro.net/indalo/recorridos", timeout=10)
+            m = re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', r.text)
+            if m:
+                self.token = m.group(1)
+                self.session.headers.update({"RequestVerificationToken": self.token})
+                return True
+        except Exception:
+            pass
+        return False
+
+    def consultar_parada(self, parada_id, linea_cod):
+        if not self.token:
+            self.renovar_sesion()
+        try:
+            r = self.session.post(
+                "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribos",
+                json={"IdentificadorParada": parada_id, "CodigoLinea": str(linea_cod)},
+                timeout=10
+            )
+            # Si caducó la sesión (error de CSRF), renovamos y reintentamos 1 vez
+            if r.status_code in [400, 401, 403, 500]:
+                self.renovar_sesion()
+                r = self.session.post(
+                    "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribos",
+                    json={"IdentificadorParada": parada_id, "CodigoLinea": str(linea_cod)},
+                    timeout=10
+                )
+            if r.status_code == 200:
+                return r.json().get("arribos", []), "OK"
+            return [], f"Error HTTP {r.status_code}"
+        except Exception as e:
+            return [], "Error de Conexión"
+
+# 3. Recolector en Segundo Plano
+scraper = IndaloScraper()
+ESTADO_GLOBAL = {"buses": {}, "contador": 1, "diag": "Iniciando motor..."}
+
+# Usamos cabeceras o puntos clave para que la API nos devuelva toda la flota de ese ramal
 PARADAS_ESTRATEGICAS = [
     ("NV4120", "1013", "50A"), ("NV1244", "1013", "50A"),
     ("NV4120", "1014", "50B"), ("NV1244", "1014", "50B"),
@@ -46,65 +109,61 @@ PARADAS_ESTRATEGICAS = [
 ]
 
 def recolector_basico():
-    """Consulta al Worker constantemente para mantener los colectivos actualizados."""
     idx = 0
     while True:
-        lote = [PARADAS_ESTRATEGICAS[(idx + i) % len(PARADAS_ESTRATEGICAS)] for i in range(3)]
-        idx = (idx + 3) % len(PARADAS_ESTRATEGICAS)
+        # Pide datos de 2 paradas cada 3 segundos
+        lote = [PARADAS_ESTRATEGICAS[(idx + i) % len(PARADAS_ESTRATEGICAS)] for i in range(2)]
+        idx = (idx + 2) % len(PARADAS_ESTRATEGICAS)
         ahora = time.time()
 
         for p_id, p_cod, p_lin in lote:
-            try:
-                r = requests.get(f"{URL_WORKER}parada", params={"id": p_id, "cod": p_cod, "linea": p_lin}, timeout=5)
-                if r.status_code == 200:
-                    data = r.json()
-                    for a in data.get("arribos", []):
-                        
-                        # EL ARREGLO ESTÁ ACÁ: Indalo crudo usa "latitud" y "longitud"
-                        lat_raw = a.get("latitud") or a.get("lat") or 0
-                        lon_raw = a.get("longitud") or a.get("lon") or 0
-                        
-                        lat = float(str(lat_raw).replace(",", "."))
-                        lon = float(str(lon_raw).replace(",", "."))
-                        
-                        if not lat or not lon: continue
+            arribos, diag_status = scraper.consultar_parada(p_id, p_cod)
+            ESTADO_GLOBAL["diag"] = f"Línea {p_lin}: {diag_status} ({len(arribos)} buses detectados)"
 
-                        # Asignar un ID a la unidad
-                        bus_id = None
-                        for b_id, b in ESTADO_GLOBAL["buses"].items():
-                            if b["linea"] == p_lin and math.sqrt((b["lat"]-lat)**2 + (b["lon"]-lon)**2) * 111 < 1.0:
-                                bus_id = b_id
-                                break
-                        
-                        if not bus_id:
-                            bus_id = f"{p_lin}_{ESTADO_GLOBAL['contador']}"
-                            ESTADO_GLOBAL["contador"] += 1
+            for a in arribos:
+                try:
+                    lat = float(str(a.get("latitud", 0)).replace(",", "."))
+                    lon = float(str(a.get("longitud", 0)).replace(",", "."))
+                except Exception:
+                    continue
+                if not lat or not lon: continue
 
-                        ramal = str(a.get("descripcionBandera") or a.get("ramal") or f"Línea {p_lin}")
-                        tiempo = str(a.get("tiempoRestanteArribo") or a.get("tiempo") or "")
-                        
-                        ESTADO_GLOBAL["buses"][bus_id] = {
-                            "id": bus_id,
-                            "linea": p_lin,
-                            "ramal": ramal,
-                            "lat": lat,
-                            "lon": lon,
-                            "tiempo": tiempo,
-                            "last_update": ahora
-                        }
-            except Exception as e:
-                pass
+                # Asignar ID constante por cercanía para que se deslicen en vez de parpadear
+                bus_id = None
+                for b_id, b in ESTADO_GLOBAL["buses"].items():
+                    if b["linea"] == p_lin and math.sqrt((b["lat"]-lat)**2 + (b["lon"]-lon)**2) * 111 < 1.0:
+                        bus_id = b_id
+                        break
+                
+                if not bus_id:
+                    bus_id = f"{p_lin}_{ESTADO_GLOBAL['contador']}"
+                    ESTADO_GLOBAL["contador"] += 1
+
+                ramal = str(a.get("descripcionBandera") or f"Línea {p_lin}")
+                
+                ESTADO_GLOBAL["buses"][bus_id] = {
+                    "id": bus_id,
+                    "linea": p_lin,
+                    "ramal": ramal,
+                    "lat": lat,
+                    "lon": lon,
+                    "tiempo": str(a.get("tiempoRestanteArribo", "")),
+                    "last_update": ahora
+                }
         
-        # Limpiar colectivos que llevan más de 4 minutos sin reportar
+        # Eliminar buses que no reportan hace 4 minutos
         ESTADO_GLOBAL["buses"] = {k: v for k, v in ESTADO_GLOBAL["buses"].items() if ahora - v["last_update"] < 240}
-        time.sleep(5)
+        time.sleep(3.5)
 
 Thread(target=recolector_basico, daemon=True).start()
 
-# 3. Rutas de la API y Web
+# 4. Rutas y Vista Web
 @app.route('/api/radar')
 def api_radar():
-    return jsonify({"buses": list(ESTADO_GLOBAL["buses"].values())})
+    return jsonify({
+        "buses": list(ESTADO_GLOBAL["buses"].values()),
+        "diag": ESTADO_GLOBAL["diag"]
+    })
 
 @app.route('/api/static_data')
 def api_static_data():
@@ -124,15 +183,19 @@ HTML_MVP = """
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     body { margin: 0; padding: 0; background: #11111B; color: white; font-family: sans-serif; }
-    header { padding: 15px; background: #1E1E2E; text-align: center; border-bottom: 2px solid #313244; }
+    header { padding: 15px; background: #1E1E2E; text-align: center; border-bottom: 2px solid #313244; position: relative; }
     h1 { margin: 0; font-size: 20px; color: #89B4FA; }
+    #diag-badge { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 6px; font-size: 10px; color: #F9E2AF; border: 1px solid #F9E2AF; }
     #map { height: calc(100vh - 55px); width: 100%; }
     .bus-marker { background: #313244; color: #A6E3A1; border: 2px solid #A6E3A1; border-radius: 8px; padding: 4px; font-size: 11px; font-weight: bold; text-align: center; white-space: nowrap; box-shadow: 0 2px 5px rgba(0,0,0,0.5); }
     .stop-marker { background: #F9E2AF; width: 8px; height: 8px; border-radius: 50%; border: 1px solid #FAB387; cursor: pointer; }
   </style>
 </head>
 <body>
-  <header><h1>🚌 Transporte Plottier (BETA Limpia)</h1></header>
+  <header>
+    <h1>🚌 Transporte Plottier (BETA)</h1>
+    <div id="diag-badge">Conectando...</div>
+  </header>
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -142,7 +205,6 @@ HTML_MVP = """
 
     let marcadoresBuses = {};
 
-    // Cargar lineas y paradas estaticas
     fetch('/api/static_data').then(r => r.json()).then(data => {
       for (const linea in data.trazas) {
         for (const sentido in data.trazas[linea]) {
@@ -176,6 +238,7 @@ HTML_MVP = """
 
     setInterval(() => {
       fetch('/api/radar').then(r => r.json()).then(data => {
+        document.getElementById('diag-badge').innerText = data.diag;
         const activos = new Set();
         data.buses.forEach(b => {
           activos.add(b.id);
