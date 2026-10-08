@@ -10,7 +10,7 @@ from flask import Flask, jsonify, render_template_string
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1. Función para buscar archivos automáticamente en cualquier subcarpeta (Anti-crasheo)
+# 1. Buscador seguro de archivos
 def find_file(filename):
     for root, dirs, files in os.walk(BASE_DIR):
         if filename in files:
@@ -47,13 +47,13 @@ for rec in raw_recorridos:
         for p in rec.get("puntos", []) if p.get("latitud") and p.get("longitud")
     ]
 
-# 2. MOTOR DIRECTO A INDALO (Sin usar Cloudflare Worker)
+# 2. MOTOR DIRECTO A INDALO (Extracción de Token Fuerza Bruta)
 class IndaloScraper:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "*/*",
+            "Accept": "application/json",
             "Origin": "https://cuandollega.smartmovepro.net",
             "Referer": "https://cuandollega.smartmovepro.net/indalo/recorridos",
             "X-Requested-With": "XMLHttpRequest"
@@ -63,7 +63,15 @@ class IndaloScraper:
     def renovar_sesion(self):
         try:
             r = self.session.get("https://cuandollega.smartmovepro.net/indalo/recorridos", timeout=10)
-            m = re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', r.text)
+            html = r.text
+            
+            # Búsqueda a prueba de fallos y saltos de línea (re.DOTALL)
+            m = re.search(r'__RequestVerificationToken.*?value=["\']([^"\']+)["\']', html, re.IGNORECASE | re.DOTALL)
+            if not m:
+                m = re.search(r'value=["\']([^"\']+)["\'].*?__RequestVerificationToken', html, re.IGNORECASE | re.DOTALL)
+            if not m:
+                m = re.search(r'(CfDJ8[A-Za-z0-9_\-]{70,})', html)
+                
             if m:
                 self.token = m.group(1)
                 self.session.headers.update({"RequestVerificationToken": self.token})
@@ -74,7 +82,8 @@ class IndaloScraper:
 
     def consultar_parada(self, parada_id, linea_cod):
         if not self.token:
-            self.renovar_sesion()
+            if not self.renovar_sesion():
+                return [], "Fallo Token"
         try:
             r = self.session.post(
                 "https://cuandollega.smartmovepro.net/indalo/recorridos?handler=Arribos",
@@ -90,16 +99,17 @@ class IndaloScraper:
                     timeout=10
                 )
             if r.status_code == 200:
-                return r.json().get("arribos", []), "OK"
+                data = r.json()
+                arribos = data.get("arribos", [])
+                return arribos, "OK"
             return [], f"Error HTTP {r.status_code}"
         except Exception as e:
-            return [], "Error de Conexión"
+            return [], "Error Timeout"
 
 # 3. Recolector en Segundo Plano
 scraper = IndaloScraper()
 ESTADO_GLOBAL = {"buses": {}, "contador": 1, "diag": "Iniciando motor..."}
 
-# Usamos cabeceras o puntos clave para que la API nos devuelva toda la flota de ese ramal
 PARADAS_ESTRATEGICAS = [
     ("NV4120", "1013", "50A"), ("NV1244", "1013", "50A"),
     ("NV4120", "1014", "50B"), ("NV1244", "1014", "50B"),
@@ -111,14 +121,17 @@ PARADAS_ESTRATEGICAS = [
 def recolector_basico():
     idx = 0
     while True:
-        # Pide datos de 2 paradas cada 3 segundos
         lote = [PARADAS_ESTRATEGICAS[(idx + i) % len(PARADAS_ESTRATEGICAS)] for i in range(2)]
         idx = (idx + 2) % len(PARADAS_ESTRATEGICAS)
         ahora = time.time()
+        
+        buses_en_lote = 0
+        ultimo_estado = ""
 
         for p_id, p_cod, p_lin in lote:
             arribos, diag_status = scraper.consultar_parada(p_id, p_cod)
-            ESTADO_GLOBAL["diag"] = f"Línea {p_lin}: {diag_status} ({len(arribos)} buses detectados)"
+            ultimo_estado = diag_status
+            buses_en_lote += len(arribos)
 
             for a in arribos:
                 try:
@@ -128,7 +141,7 @@ def recolector_basico():
                     continue
                 if not lat or not lon: continue
 
-                # Asignar ID constante por cercanía para que se deslicen en vez de parpadear
+                # Asignar ID constante
                 bus_id = None
                 for b_id, b in ESTADO_GLOBAL["buses"].items():
                     if b["linea"] == p_lin and math.sqrt((b["lat"]-lat)**2 + (b["lon"]-lon)**2) * 111 < 1.0:
@@ -140,6 +153,7 @@ def recolector_basico():
                     ESTADO_GLOBAL["contador"] += 1
 
                 ramal = str(a.get("descripcionBandera") or f"Línea {p_lin}")
+                tiempo = str(a.get("tiempoRestanteArribo", ""))
                 
                 ESTADO_GLOBAL["buses"][bus_id] = {
                     "id": bus_id,
@@ -147,9 +161,11 @@ def recolector_basico():
                     "ramal": ramal,
                     "lat": lat,
                     "lon": lon,
-                    "tiempo": str(a.get("tiempoRestanteArribo", "")),
+                    "tiempo": tiempo,
                     "last_update": ahora
                 }
+        
+        ESTADO_GLOBAL["diag"] = f"Línea {lote[-1][2]} -> {ultimo_estado} | T. Buses en mapa: {len(ESTADO_GLOBAL['buses'])}"
         
         # Eliminar buses que no reportan hace 4 minutos
         ESTADO_GLOBAL["buses"] = {k: v for k, v in ESTADO_GLOBAL["buses"].items() if ahora - v["last_update"] < 240}
