@@ -59,8 +59,14 @@ def recolector_basico():
                 if r.status_code == 200:
                     data = r.json()
                     for a in data.get("arribos", []):
-                        lat = float(str(a.get("lat", 0)).replace(",", "."))
-                        lon = float(str(a.get("lon", 0)).replace(",", "."))
+                        
+                        # EL ARREGLO ESTÁ ACÁ: Indalo crudo usa "latitud" y "longitud"
+                        lat_raw = a.get("latitud") or a.get("lat") or 0
+                        lon_raw = a.get("longitud") or a.get("lon") or 0
+                        
+                        lat = float(str(lat_raw).replace(",", "."))
+                        lon = float(str(lon_raw).replace(",", "."))
+                        
                         if not lat or not lon: continue
 
                         # Asignar un ID a la unidad
@@ -74,7 +80,8 @@ def recolector_basico():
                             bus_id = f"{p_lin}_{ESTADO_GLOBAL['contador']}"
                             ESTADO_GLOBAL["contador"] += 1
 
-                        ramal = str(a.get("descripcionBandera") or f"Línea {p_lin}")
+                        ramal = str(a.get("descripcionBandera") or a.get("ramal") or f"Línea {p_lin}")
+                        tiempo = str(a.get("tiempoRestanteArribo") or a.get("tiempo") or "")
                         
                         ESTADO_GLOBAL["buses"][bus_id] = {
                             "id": bus_id,
@@ -82,7 +89,7 @@ def recolector_basico():
                             "ramal": ramal,
                             "lat": lat,
                             "lon": lon,
-                            "tiempo": str(a.get("tiempoRestanteArribo", "")),
+                            "tiempo": tiempo,
                             "last_update": ahora
                         }
             except Exception as e:
@@ -121,7 +128,7 @@ HTML_MVP = """
     h1 { margin: 0; font-size: 20px; color: #89B4FA; }
     #map { height: calc(100vh - 55px); width: 100%; }
     .bus-marker { background: #313244; color: #A6E3A1; border: 2px solid #A6E3A1; border-radius: 8px; padding: 4px; font-size: 11px; font-weight: bold; text-align: center; white-space: nowrap; box-shadow: 0 2px 5px rgba(0,0,0,0.5); }
-    .stop-marker { background: #F9E2AF; width: 8px; height: 8px; border-radius: 50%; border: 1px solid #FAB387; }
+    .stop-marker { background: #F9E2AF; width: 8px; height: 8px; border-radius: 50%; border: 1px solid #FAB387; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -137,20 +144,17 @@ HTML_MVP = """
 
     // Cargar lineas y paradas estaticas
     fetch('/api/static_data').then(r => r.json()).then(data => {
-      // Dibujar lineas
       for (const linea in data.trazas) {
         for (const sentido in data.trazas[linea]) {
           L.polyline(data.trazas[linea][sentido], { color: '#89B4FA', weight: 4, opacity: 0.6 }).addTo(map);
         }
       }
-      // Dibujar paradas
       data.paradas.forEach(p => {
         const icon = L.divIcon({ className: 'stop-marker', iconSize: [8, 8] });
-        L.marker([p[1], p[2]], { icon: icon }).bindPopup(p[3]).addTo(map);
+        L.marker([p[1], p[2]], { icon: icon }).bindPopup(`<b>📍 ${p[3]}</b><br>ID: ${p[0]}`).addTo(map);
       });
     });
 
-    // Deslizamiento suave de los colectivos
     function deslizarMarcador(marker, lat, lon) {
       const startPos = marker.getLatLng();
       const endPos = L.latLng(lat, lon);
@@ -170,7 +174,6 @@ HTML_MVP = """
       requestAnimationFrame(animar);
     }
 
-    // Actualizar radares cada 5 segundos
     setInterval(() => {
       fetch('/api/radar').then(r => r.json()).then(data => {
         const activos = new Set();
@@ -178,7 +181,7 @@ HTML_MVP = """
           activos.add(b.id);
           const htmlIcon = `<div class="bus-marker">🚌 ${b.linea}</div>`;
           const icon = L.divIcon({ className: '', html: htmlIcon, iconSize: [60, 24], iconAnchor: [30, 12] });
-          const popup = `<b>Línea ${b.linea}</b><br>${b.ramal}<br>Info: ${b.tiempo}`;
+          const popup = `<b>Línea ${b.linea}</b><br>${b.ramal}<br>Info API: ${b.tiempo}`;
 
           if (marcadoresBuses[b.id]) {
             deslizarMarcador(marcadoresBuses[b.id], b.lat, b.lon);
@@ -189,7 +192,6 @@ HTML_MVP = """
           }
         });
 
-        // Limpiar los que ya no estan
         for (let id in marcadoresBuses) {
           if (!activos.has(id)) {
             map.removeLayer(marcadoresBuses[id]);
@@ -197,7 +199,7 @@ HTML_MVP = """
           }
         }
       });
-    }, 5000);
+    }, 4000);
   </script>
 </body>
 </html>
