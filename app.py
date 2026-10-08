@@ -112,12 +112,16 @@ def extraer_minutos(tiempo_str):
     m = re.search(r'(\d+)', str(tiempo_str or ""))
     return int(m.group(1)) if m else 999
 
-def filtrar_arribos_viaje_actual(arribos, max_minutos=42):
+def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=42):
+    """
+    Filtra los colectivos para descartar vueltas futuras e INYECTA la línea correspondiente
+    para que el servidor no los descarte al procesarlos.
+    """
     validos = []
     for a in arribos:
         min_eta = extraer_minutos(a.get("tiempo") or a.get("tiempo_arribo"))
         if min_eta <= max_minutos:
-            validos.append({**a, "_min_eta": min_eta})
+            validos.append({**a, "_min_eta": min_eta, "linea": linea})
 
     ordenados = sorted(validos, key=lambda x: x["_min_eta"])
     unicos = []
@@ -194,7 +198,6 @@ def procesar_nuevas_posiciones(detecciones):
 
         min_eta = int(d.get("_min_eta") or extraer_minutos(d.get("tiempo") or d.get("tiempo_arribo")))
         
-        # Leemos el ramal directo que viene del Worker y enderezamos el sentido forzado que trae
         ramal_raw = d.get("ramal") or f"Línea {linea}"
         sentido_bandera, code_bandera = deducir_sentido_bandera(ramal_raw)
         sentido_geo, code_geo, d_nqn, d_plo = deducir_sentido_geometria(linea, lat, lon)
@@ -272,23 +275,27 @@ def procesar_nuevas_posiciones(detecciones):
 
     ESTADO_GLOBAL["buses"] = {k: v for k, v in ESTADO_GLOBAL["buses"].items() if ahora - v["last_gps_at"] < 480}
 
-def ejecutar_paso_radar():
+def ejecutar_paso_radar(cantidad_paradas=6):
     if not RADAR_LOCK.acquire(blocking=False):
         return
     try:
         ESTADO_GLOBAL["ultimo_escaneo"] = time.time()
-        try:
-            # Se elevó el timeout a 35s porque el nuevo Worker escanea las 8 paradas internamente con demoras
-            r = requests.get(URL_WORKER, timeout=35)
-            if r.status_code == 200:
-                buses_list = r.json().get("buses", [])
-                for b in buses_list:
-                    if "tiempo_arribo" in b and "tiempo" not in b:
-                        b["tiempo"] = b["tiempo_arribo"]
-                arribos_actuales = filtrar_arribos_viaje_actual(buses_list, max_minutos=45)
-                procesar_nuevas_posiciones(arribos_actuales)
-        except Exception:
-            pass
+        
+        # Bucle central: Escanea la lista de paradas del radar conectando con el Worker
+        paradas_radar = MOD_PARADAS.PARADAS_RADAR
+        idx = ESTADO_GLOBAL["idx_radar"]
+        lote = [paradas_radar[(idx + i) % len(paradas_radar)] for i in range(cantidad_paradas)]
+        ESTADO_GLOBAL["idx_radar"] = (idx + cantidad_paradas) % len(paradas_radar)
+
+        for p_id, p_cod, p_lin in lote:
+            try:
+                rp = requests.get(f"{URL_WORKER}parada", params={"id": p_id, "cod": p_cod, "linea": p_lin}, timeout=7)
+                if rp.status_code == 200:
+                    arribos_raw = rp.json().get("arribos", [])
+                    arribos_actuales = filtrar_arribos_viaje_actual(arribos_raw, p_lin, max_minutos=45)
+                    procesar_nuevas_posiciones(arribos_actuales)
+            except Exception:
+                pass
 
         try:
             ESTADO_GLOBAL["timestamp"] = datetime.now(zoneinfo.ZoneInfo("America/Argentina/Buenos_Aires")).strftime("%H:%M:%S")
@@ -299,9 +306,8 @@ def ejecutar_paso_radar():
 
 def recolector_fondo():
     while True:
-        ejecutar_paso_radar()
-        # Escaneamos cada 12 segundos para alinear con la memoria caché interna de tu Worker
-        time.sleep(12)
+        ejecutar_paso_radar(6)
+        time.sleep(8)
 
 Thread(target=recolector_fondo, daemon=True).start()
 
@@ -310,7 +316,7 @@ Thread(target=recolector_fondo, daemon=True).start()
 @app.route('/ping')
 def ruta_cron_ok():
     if time.time() - ESTADO_GLOBAL.get("ultimo_escaneo", 0) > 4:
-        Thread(target=ejecutar_paso_radar, daemon=True).start()
+        Thread(target=ejecutar_paso_radar, args=(8,), daemon=True).start()
     return Response("<!DOCTYPE html><html><body style='background:#fff;color:#000;'>ok</body></html>", status=200, mimetype='text/html')
 
 @app.route('/logo.png')
@@ -333,8 +339,8 @@ def foto_perfil():
 @app.route('/api/parada')
 def api_parada():
     """
-    Solución 1: Zero llamadas al exterior.
-    Mide los kilómetros sobre la calle desde el bus hasta la parada y da un rango de llegada exacto.
+    Solución 1: Cero llamadas a Indalo.
+    Mide los kilómetros sobre la calle desde el bus hasta la parada y da un rango de llegada exacto en milisegundos.
     """
     p_id_raw = request.args.get("id", "")
     p_linea = normalizar_linea(request.args.get("linea", ""))
