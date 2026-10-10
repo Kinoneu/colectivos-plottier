@@ -14,7 +14,7 @@ from flask import Flask, jsonify, render_template_string, request, send_file, Re
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Buscar e importar 'paradas_horarios.py' ya sea en la raíz del repo o en una subcarpeta
+# Buscar e importar 'paradas_horarios.py'
 def cargar_modulo_paradas():
     for root, _, files in os.walk(BASE_DIR):
         if "paradas_horarios.py" in files:
@@ -50,10 +50,6 @@ def distancia_km(lat1, lon1, lat2, lon2):
     return math.sqrt(((lat1 - lat2) * 111.0) ** 2 + ((lon1 - lon2) * 111.0 * 0.777) ** 2)
 
 def densificar_traza_con_distancia(puntos, paso_km=0.020):
-    """
-    Subdivide la polilínea cada 20 metros y guarda en cada punto [lat, lon, km_acumulados]
-    para medir la distancia real exacta siguiendo las calles del recorrido.
-    """
     if not puntos or len(puntos) < 2:
         return []
     acum_km = 0.0
@@ -92,9 +88,78 @@ for rec in raw_recorridos:
 MAPA_COORDS_PARADAS = {str(p[0]).strip(): (float(p[1]), float(p[2])) for p in PARADAS_RAW}
 PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 
-URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
 ESTADO_GLOBAL = {"timestamp": "--:--:--", "buses": {}, "contador_ids": 1, "idx_radar": 0, "ultimo_escaneo": 0.0}
 RADAR_LOCK = Lock()
+
+# --- INICIO BLOQUE SCRAPER NATIVO (Reemplaza al Cloudflare Worker) ---
+API_SESSION = requests.Session()
+API_TOKEN = {"value": None, "expiry": 0}
+API_BASE_URL = "https://cuandollega.smartmovepro.net/indalo/recorridos"
+
+def refrescar_token_api():
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"}
+        r = API_SESSION.get(API_BASE_URL, headers=headers, timeout=10)
+        match = re.search(r'name="CSRF-TOKEN-CL-FORM"[^>]+value="([^"]+)"', r.text, re.IGNORECASE)
+        if match:
+            API_TOKEN["value"] = match.group(1)
+            API_TOKEN["expiry"] = time.time() + 600  # Guardar llaves por 10 minutos
+            return True
+    except Exception:
+        pass
+    return False
+
+def obtener_arribos_oficial(parada_id, linea_cod):
+    if time.time() > API_TOKEN["expiry"] or not API_TOKEN["value"]:
+        refrescar_token_api()
+        
+    if not API_TOKEN["value"]:
+        return []
+        
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Content-Type": "application/json",
+        "Origin": "https://cuandollega.smartmovepro.net",
+        "Referer": API_BASE_URL,
+        "requestverificationtoken": API_TOKEN["value"]
+    }
+    
+    payload = {"IdentificadorParada": parada_id, "CodigoLinea": linea_cod}
+    
+    try:
+        r = API_SESSION.post(f"{API_BASE_URL}?handler=Arribos", json=payload, headers=headers, timeout=6)
+        if r.status_code == 400:
+            if "Sin datos disponibles" not in r.text:
+                API_TOKEN["expiry"] = 0 # El token expiró o falló, forzamos renovación
+            return []
+            
+        if r.status_code == 200:
+            datos = r.json()
+            raw_list = datos if isinstance(datos, list) else datos.get("arribos", datos.get("d", [datos]))
+            
+            mapeados = []
+            for b in raw_list:
+                if not b: continue
+                lat_str = str(b.get("latitud", "0")).replace(",", ".")
+                lon_str = str(b.get("longitud", "0")).replace(",", ".")
+                try:
+                    lat_val = float(lat_str)
+                    lon_val = float(lon_str)
+                except ValueError:
+                    lat_val, lon_val = 0.0, 0.0
+                    
+                mapeados.append({
+                    "linea": str(b.get("descripcionLinea") or linea_cod),
+                    "ramal": str(b.get("descripcionBandera", "")),
+                    "tiempo": str(b.get("tiempoRestanteArribo", "0 aprox.")),
+                    "lat": lat_val,
+                    "lon": lon_val
+                })
+            return mapeados
+    except Exception:
+        pass
+    return []
+# --- FIN BLOQUE SCRAPER NATIVO ---
 
 def detectar_cabecera(lat, lon):
     for c_lat, c_lon, c_nom in MOD_PARADAS.CABECERAS_GEO:
@@ -117,12 +182,6 @@ def extraer_minutos(tiempo_str):
     return int(m.group(1)) if m else 999
 
 def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=42):
-    """
-    Filtra los arribos devueltos por una parada testigo:
-    1) Descarta predicciones a futuro (> 42 min) que corresponden a la vuelta siguiente
-       después de cambiar de cabecera (evita que un colectivo VUELTA se etiquete como IDA).
-    2) Si la misma unidad aparece dos veces en una parada compartida, conserva solo el menor tiempo.
-    """
     validos = []
     for a in arribos:
         min_eta = extraer_minutos(a.get("tiempo") or a.get("tiempo_arribo"))
@@ -167,10 +226,6 @@ def indice_mas_cercano(lat, lon, traza):
     return mejor_idx, menor_d
 
 def encontrar_indice_parada_adelante(coords_parada, traza, idx_bus):
-    """
-    Encuentra el punto exacto de la traza (por delante del colectivo) que pasa por la parada.
-    Exige que la calle del recorrido pase a menos de 65 metros de la parada.
-    """
     mejor_idx_stop, menor_d_stop = -1, 999.0
     for (plat, plon) in coords_parada:
         umbral_km = 0.22 if plon > -68.088 else 0.065
@@ -183,14 +238,9 @@ def encontrar_indice_parada_adelante(coords_parada, traza, idx_bus):
     return mejor_idx_stop, menor_d_stop
 
 def formatear_rango_arribo(dist_recorrido_km, lon_bus=-68.18):
-    """
-    Calcula un rango estimado corto y preciso (de 3 a 4 minutos de ventana, ej. 'Entre 5 y 8 min')
-    diferenciando la velocidad en tramos de Ruta 22 / Autovía respecto de calles internas.
-    """
     if dist_recorrido_km <= 0.18:
         return "Llegando (< 1 min)", 0
 
-    # Velocidad comercial promedio: ~26.5 km/h en corredor Ruta 22 y ~22.5 km/h en casco urbano
     vel_comercial = 26.5 if -68.215 <= lon_bus <= -68.095 else 23.0
     min_base = max(1, int(round((dist_recorrido_km / vel_comercial) * 60)))
 
@@ -228,14 +278,11 @@ def procesar_nuevas_posiciones(detecciones):
             delta_lon = lon - bus["lon"]
             dt = max(ahora - bus["last_gps_at"], 1.0)
 
-            # 1. En sectores donde las trazas de IDA y VUELTA van por distintas calles, manda la calle
             if abs(d_nqn - d_plo) > 0.08:
                 sentido, sentido_code = sentido_geo, code_geo
-            # 2. Si el GPS avanzó físicamente más de 30m en sentido Este/Oeste, manda el desplazamiento real
             elif abs(delta_lon) > 0.00035:
                 sentido = "Hacia Plottier" if delta_lon < 0 else "Hacia Neuquén"
                 sentido_code = "HACIA_PLOTTIER" if delta_lon < 0 else "HACIA_NEUQUEN"
-            # 3. Si reporta bandera, solo cambiar el sentido si el nuevo reporte tiene un ETA menor (viaje actual)
             elif sentido_bandera:
                 eta_previa = bus.get("min_eta_radar", 999)
                 edad_eta_previa = ahora - bus.get("eta_radar_at", 0)
@@ -303,9 +350,10 @@ def ejecutar_paso_radar(cantidad_paradas=6):
 
         for p_id, p_cod, p_lin in lote:
             try:
-                rp = requests.get(f"{URL_WORKER}parada", params={"id": p_id, "cod": p_cod, "linea": p_lin}, timeout=6)
-                if rp.status_code == 200:
-                    arribos_actuales = filtrar_arribos_viaje_actual(rp.json().get("arribos", []), p_lin, max_minutos=42)
+                # Ahora consultamos de forma nativa sin pasar por Cloudflare
+                arribos = obtener_arribos_oficial(p_id, p_cod)
+                if arribos:
+                    arribos_actuales = filtrar_arribos_viaje_actual(arribos, p_lin, max_minutos=42)
                     procesar_nuevas_posiciones(arribos_actuales)
             except Exception:
                 pass
