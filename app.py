@@ -14,7 +14,6 @@ from flask import Flask, jsonify, render_template_string, request, send_file, Re
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Buscar e importar 'paradas_horarios.py'
 def cargar_modulo_paradas():
     for root, _, files in os.walk(BASE_DIR):
         if "paradas_horarios.py" in files:
@@ -28,7 +27,6 @@ def cargar_modulo_paradas():
 
 MOD_PARADAS = cargar_modulo_paradas()
 
-# Cargar archivos base de paradas y recorridos
 with open(os.path.join(BASE_DIR, "paradas_optimizadas.json"), "r", encoding="utf-8") as f:
     PARADAS_RAW = json.load(f)
 
@@ -91,48 +89,15 @@ PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 ESTADO_GLOBAL = {"timestamp": "--:--:--", "buses": {}, "contador_ids": 1, "idx_radar": 0, "ultimo_escaneo": 0.0}
 RADAR_LOCK = Lock()
 
-# --- INICIO BLOQUE SCRAPER NATIVO (Reemplaza al Cloudflare Worker) ---
-API_SESSION = requests.Session()
-API_TOKEN = {"value": None, "expiry": 0}
-API_BASE_URL = "https://cuandollega.smartmovepro.net/indalo/recorridos"
-
-def refrescar_token_api():
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"}
-        r = API_SESSION.get(API_BASE_URL, headers=headers, timeout=10)
-        match = re.search(r'name="CSRF-TOKEN-CL-FORM"[^>]+value="([^"]+)"', r.text, re.IGNORECASE)
-        if match:
-            API_TOKEN["value"] = match.group(1)
-            API_TOKEN["expiry"] = time.time() + 600  # Guardar llaves por 10 minutos
-            return True
-    except Exception:
-        pass
-    return False
+# --- PEGA AQUÍ LA URL DE GOOGLE QUE COPIASTE EN EL PASO 8 ---
+URL_PROXY_GOOGLE = "https://script.google.com/macros/s/AKfycbyoZwWWVOq-JiaDkyyW16qXmDUIg9GQbikSw2r-io5ZvYJFMXYRbAj-O_LTNKZML9RxYg/exec"
 
 def obtener_arribos_oficial(parada_id, linea_cod):
-    if time.time() > API_TOKEN["expiry"] or not API_TOKEN["value"]:
-        refrescar_token_api()
-        
-    if not API_TOKEN["value"]:
+    if not URL_PROXY_GOOGLE.startswith("http"):
         return []
-        
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Content-Type": "application/json",
-        "Origin": "https://cuandollega.smartmovepro.net",
-        "Referer": API_BASE_URL,
-        "requestverificationtoken": API_TOKEN["value"]
-    }
-    
-    payload = {"IdentificadorParada": parada_id, "CodigoLinea": linea_cod}
-    
     try:
-        r = API_SESSION.post(f"{API_BASE_URL}?handler=Arribos", json=payload, headers=headers, timeout=6)
-        if r.status_code == 400:
-            if "Sin datos disponibles" not in r.text:
-                API_TOKEN["expiry"] = 0 # El token expiró o falló, forzamos renovación
-            return []
-            
+        # Hacemos la consulta a traves de Google Apps Script
+        r = requests.get(f"{URL_PROXY_GOOGLE}?id={parada_id}&cod={linea_cod}", timeout=15)
         if r.status_code == 200:
             datos = r.json()
             raw_list = datos if isinstance(datos, list) else datos.get("arribos", datos.get("d", [datos]))
@@ -140,6 +105,7 @@ def obtener_arribos_oficial(parada_id, linea_cod):
             mapeados = []
             for b in raw_list:
                 if not b: continue
+                # Limpiamos las comas que envía la API de Indalo
                 lat_str = str(b.get("latitud", "0")).replace(",", ".")
                 lon_str = str(b.get("longitud", "0")).replace(",", ".")
                 try:
@@ -159,7 +125,6 @@ def obtener_arribos_oficial(parada_id, linea_cod):
     except Exception:
         pass
     return []
-# --- FIN BLOQUE SCRAPER NATIVO ---
 
 def detectar_cabecera(lat, lon):
     for c_lat, c_lon, c_nom in MOD_PARADAS.CABECERAS_GEO:
@@ -350,7 +315,6 @@ def ejecutar_paso_radar(cantidad_paradas=6):
 
         for p_id, p_cod, p_lin in lote:
             try:
-                # Ahora consultamos de forma nativa sin pasar por Cloudflare
                 arribos = obtener_arribos_oficial(p_id, p_cod)
                 if arribos:
                     arribos_actuales = filtrar_arribos_viaje_actual(arribos, p_lin, max_minutos=42)
