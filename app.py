@@ -89,15 +89,58 @@ PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 ESTADO_GLOBAL = {"timestamp": "--:--:--", "buses": {}, "contador_ids": 1, "idx_radar": 0, "ultimo_escaneo": 0.0}
 RADAR_LOCK = Lock()
 
-# --- PEGA AQUÍ LA URL DE GOOGLE QUE COPIASTE EN EL PASO 8 ---
-URL_PROXY_GOOGLE = "https://script.google.com/macros/s/AKfycbyoZwWWVOq-JiaDkyyW16qXmDUIg9GQbikSw2r-io5ZvYJFMXYRbAj-O_LTNKZML9RxYg/exec"
+# --- BLOQUE NATIVO REPOTENCIADO PARA EVADIR EL FIREWALL ---
+API_SESSION = requests.Session()
+API_TOKEN = {"value": None, "expiry": 0}
+API_BASE_URL = "https://cuandollega.smartmovepro.net/indalo/recorridos"
+
+# Headers idénticos a los del navegador que funcionaron en CMD
+HEADERS_NAV = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+}
+
+HEADERS_POST = {
+    "User-Agent": HEADERS_NAV["User-Agent"],
+    "Accept": "application/json, text/plain, */*",
+    "Content-Type": "application/json",
+    "Origin": "https://cuandollega.smartmovepro.net",
+    "Referer": API_BASE_URL,
+    "X-Requested-With": "XMLHttpRequest"
+}
+
+def refrescar_token_api():
+    try:
+        r = API_SESSION.get(API_BASE_URL, headers=HEADERS_NAV, timeout=10)
+        # Expresión regular ajustada al input oculto CSRF
+        match = re.search(r'name="CSRF-TOKEN-CL-FORM"[^>]+value="([^"]+)"', r.text, re.IGNORECASE)
+        if not match:
+            match = re.search(r'value="([^"]+)"[^>]+name="CSRF-TOKEN-CL-FORM"', r.text, re.IGNORECASE)
+            
+        if match:
+            API_TOKEN["value"] = match.group(1)
+            API_TOKEN["expiry"] = time.time() + 600  # Guardar llaves por 10 minutos
+            print("Token extraído con éxito en Render.", flush=True)
+            return True
+    except Exception as e:
+        print(f"Error renovando token: {e}", flush=True)
+    return False
 
 def obtener_arribos_oficial(parada_id, linea_cod):
-    if not URL_PROXY_GOOGLE.startswith("http"):
+    if time.time() > API_TOKEN["expiry"] or not API_TOKEN["value"]:
+        refrescar_token_api()
+        
+    if not API_TOKEN["value"]:
         return []
+        
+    headers = HEADERS_POST.copy()
+    headers["requestverificationtoken"] = API_TOKEN["value"]
+    
+    payload = {"IdentificadorParada": str(parada_id), "CodigoLinea": str(linea_cod)}
+    
     try:
-        # Hacemos la consulta a traves de Google Apps Script
-        r = requests.get(f"{URL_PROXY_GOOGLE}?id={parada_id}&cod={linea_cod}", timeout=15)
+        r = API_SESSION.post(f"{API_BASE_URL}?handler=Arribos", json=payload, headers=headers, timeout=8)
+        
         if r.status_code == 200:
             datos = r.json()
             raw_list = datos if isinstance(datos, list) else datos.get("arribos", datos.get("d", [datos]))
@@ -105,7 +148,7 @@ def obtener_arribos_oficial(parada_id, linea_cod):
             mapeados = []
             for b in raw_list:
                 if not b: continue
-                # Limpiamos las comas que envía la API de Indalo
+                # Limpiamos formatos de coma a punto decimal
                 lat_str = str(b.get("latitud", "0")).replace(",", ".")
                 lon_str = str(b.get("longitud", "0")).replace(",", ".")
                 try:
@@ -122,9 +165,17 @@ def obtener_arribos_oficial(parada_id, linea_cod):
                     "lon": lon_val
                 })
             return mapeados
-    except Exception:
+            
+        elif r.status_code == 400:
+            # Si el error 400 no dice "Sin datos", el token expiró. Reseteamos.
+            if "Sin datos" not in r.text:
+                API_TOKEN["expiry"] = 0
+                
+    except Exception as e:
         pass
     return []
+
+# --- FIN BLOQUE NATIVO ---
 
 def detectar_cabecera(lat, lon):
     for c_lat, c_lon, c_nom in MOD_PARADAS.CABECERAS_GEO:
@@ -146,7 +197,8 @@ def extraer_minutos(tiempo_str):
     m = re.search(r'(\d+)', str(tiempo_str or ""))
     return int(m.group(1)) if m else 999
 
-def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=42):
+# AUMENTADO A 85 MINUTOS PARA EVITAR QUE SE BORREN COLECTIVOS LEJANOS COMO EN EL CMD
+def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=85):
     validos = []
     for a in arribos:
         min_eta = extraer_minutos(a.get("tiempo") or a.get("tiempo_arribo"))
@@ -317,7 +369,8 @@ def ejecutar_paso_radar(cantidad_paradas=6):
             try:
                 arribos = obtener_arribos_oficial(p_id, p_cod)
                 if arribos:
-                    arribos_actuales = filtrar_arribos_viaje_actual(arribos, p_lin, max_minutos=42)
+                    # Usamos 85 min para no ignorar unidades al inicio/fin del recorrido
+                    arribos_actuales = filtrar_arribos_viaje_actual(arribos, p_lin, max_minutos=85)
                     procesar_nuevas_posiciones(arribos_actuales)
             except Exception:
                 pass
