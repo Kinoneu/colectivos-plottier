@@ -1,3 +1,5 @@
-Flask
-requests
+flask
 gunicorn
+aiohttp
+requests
+tzdata
