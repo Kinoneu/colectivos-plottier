@@ -6,7 +6,6 @@ import json
 import math
 import asyncio
 import aiohttp
-import requests
 import importlib.util
 from datetime import datetime
 import zoneinfo
@@ -21,99 +20,27 @@ BROWSER_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 
-URL_DIRECTA_BASE = "https://cuandollegaprueba.smartmovepro.net/indalo/recorridos"
-URL_DIRECTA_ARRIBOS = "https://cuandollegaprueba.smartmovepro.net/indalo/recorridos?handler=Arribos"
-URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
-
-# Sesión directa persistente (Columna vertebral probada en explorar_api.py)
-SESION_DIRECTA = requests.Session()
-SESION_DIRECTA.headers.update({
-    "User-Agent": BROWSER_UA,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "es-AR,es;q=0.9,en;q=0.8"
-})
-TOKEN_DIRECTO = {"valor": None, "expira": 0.0}
-
-def obtener_token_directo(forzar=False):
-    ahora = time.time()
-    if not forzar and TOKEN_DIRECTO["valor"] and ahora < TOKEN_DIRECTO["expira"]:
-        return TOKEN_DIRECTO["valor"]
-    try:
-        resp = SESION_DIRECTA.get(URL_DIRECTA_BASE, timeout=10)
-        m = (
-            re.search(r'name="CSRF-TOKEN-CL-FORM"[^>]*value="([^"]+)"', resp.text)
-            or re.search(r'value="(CfDJ8[a-zA-Z0-9_\-]+)"', resp.text)
-        )
-        if m:
-            TOKEN_DIRECTO["valor"] = m.group(1)
-            TOKEN_DIRECTO["expira"] = ahora + 480
-            return TOKEN_DIRECTO["valor"]
-    except Exception:
-        pass
-    return TOKEN_DIRECTO["valor"]
-
-def consultar_parada_directa(p_id, p_cod, p_lin):
-    token = obtener_token_directo()
-    if not token:
-        return p_lin, []
-    headers = {
-        "Content-Type": "application/json; charset=UTF-8",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With": "XMLHttpRequest",
-        "RequestVerificationToken": token,
-        "Origin": "https://cuandollegaprueba.smartmovepro.net",
-        "Referer": URL_DIRECTA_BASE
-    }
-    payload = {"IdentificadorParada": p_id, "CodigoLinea": str(p_cod)}
-    try:
-        r = SESION_DIRECTA.post(URL_DIRECTA_ARRIBOS, headers=headers, json=payload, timeout=8)
-        if r.status_code in (400, 401, 403):
-            token = obtener_token_directo(forzar=True)
-            headers["RequestVerificationToken"] = token or ""
-            r = SESION_DIRECTA.post(URL_DIRECTA_ARRIBOS, headers=headers, json=payload, timeout=8)
-        if r.status_code == 200:
-            datos = r.json()
-            lista = datos.get("arribos") or []
-            arribos_norm = []
-            for a in lista:
-                lat_raw = a.get("latitud")
-                lon_raw = a.get("longitud")
-                if not lat_raw or not lon_raw:
-                    continue
-                tiene_parada = bool(a.get("latitudParada") and str(a.get("latitudParada")).strip() != "")
-                arribos_norm.append({
-                    "ramal": (a.get("descripcionBandera") or f"Línea {p_lin}").strip(),
-                    "tiempo": a.get("tiempoRestanteArribo") or "",
-                    "tiempo_arribo": a.get("tiempoRestanteArribo") or "",
-                    "linea": p_lin,
-                    "lat": float(str(lat_raw).replace(",", ".")),
-                    "lon": float(str(lon_raw).replace(",", ".")),
-                    "_es_primario": tiene_parada
-                })
-            return p_lin, arribos_norm
-    except Exception:
-        pass
-    return p_lin, []
-
-# Carga de catálogos y planillas (Tren, Horarios e Interfaz)
+# Carga segura de paradas_horarios.py agregando su directorio a sys.path
 def cargar_modulo_paradas():
-    ruta_pref = os.path.join(BASE_DIR, "paradas-horarios", "paradas_horarios.py")
-    if os.path.isfile(ruta_pref):
-        spec = importlib.util.spec_from_file_location("paradas_horarios", ruta_pref)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["paradas_horarios"] = mod
-        spec.loader.exec_module(mod)
-        return mod
-
+    posibles_rutas = [
+        os.path.join(BASE_DIR, "paradas-horarios", "paradas_horarios.py"),
+        os.path.join(BASE_DIR, "paradas_horarios.py")
+    ]
     for root, _, files in os.walk(BASE_DIR):
         if "paradas_horarios.py" in files:
-            ruta_mod = os.path.join(root, "paradas_horarios.py")
+            posibles_rutas.append(os.path.join(root, "paradas_horarios.py"))
+
+    for ruta_mod in posibles_rutas:
+        if os.path.isfile(ruta_mod):
+            dir_mod = os.path.dirname(ruta_mod)
+            if dir_mod not in sys.path:
+                sys.path.insert(0, dir_mod)
             spec = importlib.util.spec_from_file_location("paradas_horarios", ruta_mod)
             mod = importlib.util.module_from_spec(spec)
             sys.modules["paradas_horarios"] = mod
             spec.loader.exec_module(mod)
             return mod
-    raise RuntimeError("No se encontró la carpeta 'paradas-horarios' junto a app.py.")
+    raise RuntimeError("No se encontró paradas_horarios.py en el repositorio.")
 
 MOD_PARADAS = cargar_modulo_paradas()
 
@@ -176,6 +103,8 @@ for rec in raw_recorridos:
 MAPA_COORDS_PARADAS = {str(p[0]).strip(): (float(p[1]), float(p[2])) for p in PARADAS_RAW}
 PARADAS_CLUSTERIZADAS = MOD_PARADAS.agrupar_paradas_inteligente(PARADAS_RAW)
 
+URL_WORKER = "https://radar-colectivos.gorolol.workers.dev/"
+
 ESTADO_GLOBAL = {
     "timestamp": "--:--:--",
     "buses": {},
@@ -204,15 +133,16 @@ PARADAS_RADAR_DIRECTO = [
 
 async def fetch_parada_async(session, p_id, p_cod, p_lin):
     try:
+        timeout = aiohttp.ClientTimeout(total=4.5)
         async with session.get(
             f"{URL_WORKER}parada",
             params={"id": p_id, "cod": p_cod, "linea": p_lin},
-            timeout=4
+            timeout=timeout
         ) as response:
             if response.status == 200:
                 payload = await response.json()
-                if payload.get("ok") and payload.get("arribos"):
-                    return p_lin, payload.get("arribos")
+                if payload.get("ok"):
+                    return p_lin, payload.get("arribos") or []
     except Exception:
         pass
     return p_lin, []
@@ -257,7 +187,6 @@ def filtrar_arribos_viaje_actual(arribos, linea, max_minutos=150):
             es_prim = 0 if a.get("_es_primario") else 1
             validos.append({**a, "_min_eta": min_eta, "_orden_prim": es_prim})
 
-    # Priorizamos los que tienen latitudParada activa (_orden_prim == 0) y menor ETA
     ordenados = sorted(validos, key=lambda x: (x["_orden_prim"], x["_min_eta"]))
     unicos = []
     for a in ordenados:
@@ -501,11 +430,6 @@ def procesar_nuevas_posiciones(detecciones):
     ESTADO_GLOBAL["buses"] = buses_limpios
 
 async def escanear_radar_async(cantidad_paradas=6):
-    """
-    Motor Híbrido: Intenta con el Cloudflare Worker y, si devuelve 0 unidades
-    (o aún no fue actualizado), consulta directamente cuandollegaprueba.smartmovepro.net
-    con la sesión CfDJ8 probada en explorar_api.py.
-    """
     if not RADAR_LOCK.acquire(blocking=False):
         return
     try:
@@ -525,25 +449,13 @@ async def escanear_radar_async(cantidad_paradas=6):
                 acumulado_por_linea.setdefault(p_lin, []).extend(arribos_raw)
                 total_descargas += len(arribos_raw)
 
-        origen_datos = "Worker Cloudflare"
-
-        # Respaldo Directo Automático (Columna vertebral probada en consola)
-        if total_descargas == 0:
-            origen_datos = "Directo SmartMovePro (CfDJ8)"
-            for p_id, p_cod, p_lin in lote:
-                lin, arribos_dir = consultar_parada_directa(p_id, p_cod, p_lin)
-                if arribos_dir:
-                    acumulado_por_linea.setdefault(lin, []).extend(arribos_dir)
-                    total_descargas += len(arribos_dir)
-                time.sleep(0.15)
-
         if total_descargas > 0:
-            ESTADO_GLOBAL["ultimo_diag"] = f"{origen_datos} OK: {total_descargas} arribos procesados"
+            ESTADO_GLOBAL["ultimo_diag"] = f"Worker Cloudflare OK: {total_descargas} arribos"
             for lin, lista_raw in acumulado_por_linea.items():
                 arribos_unicos = filtrar_arribos_viaje_actual(lista_raw, lin, max_minutos=150)
                 procesar_nuevas_posiciones(arribos_unicos)
         else:
-            ESTADO_GLOBAL["ultimo_diag"] = "Sin unidades detectadas en este barrido"
+            ESTADO_GLOBAL["ultimo_diag"] = "Worker respondió 0 arribos (verificar deploy del Worker en Cloudflare)"
 
         try:
             ESTADO_GLOBAL["timestamp"] = datetime.now(
@@ -558,7 +470,9 @@ def puente_asincrono(cantidad_paradas):
     asyncio.run(escanear_radar_async(cantidad_paradas))
 
 def recolector_fondo():
-    puente_asincrono(len(PARADAS_RADAR_DIRECTO))
+    # Esperamos 2 segundos para que Gunicorn levante la web de inmediato sin bloquearse
+    time.sleep(2)
+    puente_asincrono(6)
     while True:
         time.sleep(6)
         puente_asincrono(6)
@@ -645,12 +559,9 @@ def api_parada():
 @app.route('/api/radar')
 def api_radar():
     ahora = time.time()
-    if not ESTADO_GLOBAL["buses"] and (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 2:
-        Thread(target=puente_asincrono, args=(len(PARADAS_RADAR_DIRECTO),), daemon=True).start()
-    elif (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 7:
+    if (ahora - ESTADO_GLOBAL.get("ultimo_escaneo", 0)) > 7:
         Thread(target=puente_asincrono, args=(6,), daemon=True).start()
 
-    ahora = time.time()
     lista = [
         {**b, "edad_senal": int(max(0, ahora - b["last_gps_at"]))}
         for b in ESTADO_GLOBAL["buses"].values()
